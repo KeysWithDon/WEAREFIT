@@ -1323,7 +1323,7 @@ select {
 
 .bill-sections {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -1373,7 +1373,7 @@ select {
 }
 
 .data-table.compact {
-  min-width: 460px;
+  min-width: 700px;
 }
 
 .data-table th {
@@ -2901,7 +2901,21 @@ html[data-theme="dark"] .sidebar-brand img {
 
 .bill-selector-wrap {
   position: relative;
-  min-width: 160px;
+  width: 100%;
+  min-width: 0;
+}
+
+.bill-sections .subpanel {
+  width: 100%;
+}
+
+.bill-sections .data-table-wrap {
+  overflow-x: auto;
+}
+
+.bill-sections .table-input {
+  min-width: 0;
+  width: 100%;
 }
 
 .bill-selector-wrap .table-input {

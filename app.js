@@ -1800,7 +1800,7 @@ function memberConnectionCard(member) {
 }
 
 function inviteCard(invite) {
-  return `<article class="invite-card"><div><strong>${escapeHtml(invite.memberEmail)}</strong><span>${escapeHtml(invite.status)} · Sent ${updatedLabel(invite.createdAt)}</span><code>${escapeHtml(invite.inviteUrl)}</code></div><span class="badge ${invite.status === "accepted" ? "green" : ""}">${escapeHtml(invite.status)}</span></article>`;
+  return `<article class="invite-card"><div><strong>${escapeHtml(invite.memberEmail)}</strong><span>${escapeHtml(invite.status)} · Sent ${updatedLabel(invite.createdAt)}</span><code>${escapeHtml(invite.inviteUrl)}</code></div><div class="button-row"><span class="badge ${invite.status === "accepted" ? "green" : ""}">${escapeHtml(invite.status)}</span>${invite.status === "pending" ? `<button class="btn btn-danger btn-small" type="button" data-delete-coach-invite="${invite.id}">Delete request</button>` : ""}</div></article>`;
 }
 
 function memberInviteCard(invite) {
@@ -2417,14 +2417,14 @@ function billGroup(form, key, label, readOnly, isCoachReview) {
       </div>
       <div class="data-table-wrap">
         <table class="data-table compact">
-          <thead><tr><th style="width:31%">Bill</th><th style="width:23%">Due date</th><th style="width:19%">Amount</th><th style="width:22%">Coach plan</th><th style="width:5%"></th></tr></thead>
+          <thead><tr><th style="width:${isCoachReview ? "31%" : "45%"}">Bill</th><th style="width:${isCoachReview ? "23%" : "28%"}">Due date</th><th style="width:${isCoachReview ? "19%" : "22%"}">Amount</th>${isCoachReview ? `<th style="width:22%">Coach plan</th>` : ""}<th style="width:5%"></th></tr></thead>
           <tbody>
             ${rows.map((row, index) => `
               <tr>
                 <td><div class="bill-selector-wrap"><input class="table-input" list="${listId}" data-bill-suggestion="${key}.${index}" data-path="bills.${key}.${index}.name" value="${escapeHtml(row.name)}" placeholder="Choose or enter bill" ${readOnly ? "disabled" : ""}>${readOnly ? "" : `<button class="bill-selector-button" type="button" data-open-bill-selector aria-label="Open saved bill selector" title="Open saved bill selector">⌄</button>`}</div></td>
                 <td><input class="table-input" type="date" data-current-calendar data-path="bills.${key}.${index}.dueDate" value="${row.dueDate}" ${readOnly ? "disabled" : ""}></td>
                 <td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step="0.01" data-path="bills.${key}.${index}.amount" value="${row.amount}" placeholder="0" ${readOnly ? "disabled" : ""}></div></td>
-                <td>${billDecisionControl(`bills.${key}.${index}.coachDecision`, row.coachDecision, isCoachReview)}</td>
+                ${isCoachReview ? `<td>${billDecisionControl(`bills.${key}.${index}.coachDecision`, row.coachDecision, true)}</td>` : ""}
                 <td>${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove row" aria-label="Remove row" data-remove-row="bills.${key}.${index}">×</button>`}</td>
               </tr>
             `).join("")}
@@ -3452,6 +3452,23 @@ document.addEventListener("click", async (event) => {
     saveState();
     renderCoachConnection();
     showToast(invite.status === "accepted" ? "Coach invite accepted" : "Coach invite declined");
+    return;
+  }
+
+  const deleteCoachInvite = event.target.closest("[data-delete-coach-invite]");
+  if (deleteCoachInvite) {
+    const coach = currentAccount();
+    const invite = appState.coachInvites.find(
+      (item) => item.id === deleteCoachInvite.dataset.deleteCoachInvite,
+    );
+    if (!invite || coach.role !== "coach" || invite.coachEmail !== coach.email || invite.status !== "pending") {
+      showToast("That pending invitation is no longer available.");
+      return;
+    }
+    appState.coachInvites = appState.coachInvites.filter((item) => item.id !== invite.id);
+    saveState();
+    renderCoachConnection();
+    showToast("Pending mentee invitation deleted.");
     return;
   }
 
