@@ -1,0 +1,4 @@
+project_id = "wearefit"
+
+[functions.send-coach-invite]
+verify_jwt = true

@@ -1,0 +1,262 @@
+(() => {
+  const config = window.WEAREFIT_CONFIG || {};
+  const configured =
+    Boolean(config.production) &&
+    Boolean(config.supabaseUrl) &&
+    Boolean(config.supabasePublishableKey) &&
+    !config.supabaseUrl.includes("YOUR_PROJECT");
+  const client = configured
+    ? window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      })
+    : null;
+  let accessibleStateRows = new Map();
+  let saveTimer = null;
+
+  function cleanAccount(account) {
+    const cleaned = structuredClone(account);
+    delete cleaned.password;
+    delete cleaned.verificationCode;
+    cleaned.verified = true;
+    return cleaned;
+  }
+
+  function stateForOwner(state, ownerEmail) {
+    const owner = state.accounts[ownerEmail];
+    if (!owner) return null;
+    return {
+      accounts: { [ownerEmail]: cleanAccount(owner) },
+      forms: Object.fromEntries(
+        Object.entries(state.forms).filter(([, form]) => form.ownerEmail === ownerEmail),
+      ),
+      coachRequests: state.coachRequests.filter((item) => item.memberEmail === ownerEmail),
+      coachInvites: state.coachInvites.filter(
+        (item) => item.memberEmail === ownerEmail || item.coachEmail === ownerEmail,
+      ),
+      withdrawals: state.withdrawals.filter((item) => item.memberEmail === ownerEmail),
+      sessions: state.sessions.filter((item) => item.memberEmail === ownerEmail),
+      dateAutofillDisabled: true,
+      sessionEmail: null,
+    };
+  }
+
+  function mergeStates(rows, sessionEmail) {
+    const merged = {
+      accounts: {},
+      forms: {},
+      coachRequests: [],
+      coachInvites: [],
+      withdrawals: [],
+      sessions: [],
+      dateAutofillDisabled: true,
+      sessionEmail,
+    };
+    rows.forEach((row) => {
+      const state = row.state || {};
+      Object.assign(merged.accounts, state.accounts || {});
+      Object.assign(merged.forms, state.forms || {});
+      ["coachRequests", "coachInvites", "withdrawals", "sessions"].forEach((key) => {
+        const seen = new Set(merged[key].map((item) => item.id));
+        (state[key] || []).forEach((item) => {
+          if (!seen.has(item.id)) merged[key].push(item);
+        });
+      });
+    });
+    return merged;
+  }
+
+  async function session() {
+    if (!client) return null;
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
+    return data.session;
+  }
+
+  async function hydrate() {
+    const currentSession = await session();
+    if (!currentSession) return null;
+    const email = currentSession.user.email.toLowerCase();
+    const { data: rows, error } = await client
+      .from("portal_states")
+      .select("owner_id, owner_email, role, coach_email, state");
+    if (error) throw error;
+    accessibleStateRows = new Map(rows.map((row) => [row.owner_email, row]));
+    if (!accessibleStateRows.has(email)) {
+      const metadata = currentSession.user.user_metadata || {};
+      const account = {
+        name: metadata.name || email.split("@")[0],
+        email,
+        role: metadata.role === "coach" ? "coach" : "user",
+        verified: true,
+        profileCompleted: false,
+        coachEmail: null,
+        coachRequestStatus: null,
+        preferences: { theme: "light" },
+        profilePhoto: null,
+        spousePhoto: null,
+        carryForward: {},
+        profile: {
+          maritalStatus: "",
+          spouseName: "",
+          phone: "",
+          address: "",
+          employer: "",
+          payFrequency: "",
+        },
+        paystubs: [],
+        savingsInvestmentAccounts: [],
+        financialInventory: { recurringBills: [], creditCards: [], debts: [] },
+      };
+      const state = {
+        accounts: { [email]: account },
+        forms: {},
+        coachRequests: [],
+        coachInvites: [],
+        withdrawals: [],
+        sessions: [],
+        dateAutofillDisabled: true,
+        sessionEmail: null,
+      };
+      const { error: insertError } = await client.from("portal_states").insert({
+        owner_id: currentSession.user.id,
+        owner_email: email,
+        role: account.role,
+        coach_email: null,
+        state,
+      });
+      if (insertError) throw insertError;
+      const createdState = { ...state, sessionEmail: email };
+      await refreshFileUrls(createdState);
+      return createdState;
+    }
+    const merged = mergeStates(rows, email);
+    await refreshFileUrls(merged);
+    return merged;
+  }
+
+  async function refreshFileUrls(state) {
+    for (const account of Object.values(state.accounts || {})) {
+      for (const photo of [account.profilePhoto, account.spousePhoto]) {
+        if (!photo?.storagePath) continue;
+        const { data } = await client.storage.from("profile-photos").createSignedUrl(photo.storagePath, 3600);
+        if (data?.signedUrl) photo.dataUrl = data.signedUrl;
+      }
+      for (const paystub of account.paystubs || []) {
+        if (!paystub?.storagePath) continue;
+        const { data } = await client.storage.from("financial-documents").createSignedUrl(paystub.storagePath, 3600);
+        if (data?.signedUrl) paystub.dataUrl = data.signedUrl;
+      }
+    }
+  }
+
+  async function persist(state) {
+    const currentSession = await session();
+    if (!currentSession) return;
+    const currentEmail = currentSession.user.email.toLowerCase();
+    const current = state.accounts[currentEmail];
+    if (!current) return;
+    const allowedOwners = Object.values(state.accounts).filter(
+      (account) =>
+        account.email === currentEmail ||
+        (current.role === "coach" &&
+          account.role === "user" &&
+          account.coachEmail === currentEmail &&
+          account.coachRequestStatus === "approved"),
+    );
+    for (const account of allowedOwners) {
+      const existing = accessibleStateRows.get(account.email);
+      const payload = {
+        owner_id: existing?.owner_id || currentSession.user.id,
+        owner_email: account.email,
+        role: account.role,
+        coach_email: account.coachEmail || null,
+        state: stateForOwner(state, account.email),
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await client.from("portal_states").upsert(payload, {
+        onConflict: "owner_id",
+      });
+      if (error) throw error;
+    }
+  }
+
+  function queuePersist(state) {
+    if (!client) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => persist(state).catch(console.error), 500);
+  }
+
+  async function signUp({ name, email, password, role }) {
+    const { data, error } = await client.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { name, role },
+        emailRedirectTo: config.appUrl,
+      },
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function signIn({ email, password }) {
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+  }
+
+  async function verifyOtp(email, token) {
+    const { data, error } = await client.auth.verifyOtp({ email, token, type: "signup" });
+    if (error) throw error;
+    return data;
+  }
+
+  async function resendVerification(email) {
+    const { error } = await client.auth.resend({ type: "signup", email });
+    if (error) throw error;
+  }
+
+  async function signOut() {
+    const { error } = await client.auth.signOut();
+    if (error) throw error;
+  }
+
+  async function sendCoachInvite(memberEmail) {
+    const { data, error } = await client.functions.invoke("send-coach-invite", {
+      body: { memberEmail, appUrl: config.appUrl },
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function uploadPrivateFile(bucket, file, category) {
+    const currentSession = await session();
+    if (!currentSession) throw new Error("Sign in before uploading a file.");
+    const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
+    const safeCategory = category.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+    const path = `${currentSession.user.id}/${safeCategory}/${crypto.randomUUID()}.${extension}`;
+    const { error } = await client.storage.from(bucket).upload(path, file, {
+      contentType: file.type,
+      upsert: false,
+    });
+    if (error) throw error;
+    const { data, error: signedError } = await client.storage.from(bucket).createSignedUrl(path, 3600);
+    if (signedError) throw signedError;
+    return { storagePath: path, dataUrl: data.signedUrl };
+  }
+
+  window.WEAREFIT_BACKEND = {
+    enabled: configured,
+    client,
+    config,
+    hydrate,
+    queuePersist,
+    signUp,
+    signIn,
+    verifyOtp,
+    resendVerification,
+    signOut,
+    sendCoachInvite,
+    uploadPrivateFile,
+  };
+})();

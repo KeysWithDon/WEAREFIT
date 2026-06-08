@@ -1,4 +1,5 @@
 const STORAGE_KEY = "fit-financial-portal-v1";
+const productionBackend = window.WEAREFIT_BACKEND || { enabled: false };
 
 const billGroups = [
   ["housing", "Housing"],
@@ -626,6 +627,7 @@ function nowForSeed() {
 function saveState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+    productionBackend.queuePersist?.(appState);
     return true;
   } catch (error) {
     console.warn("Could not save portal data", error);
@@ -898,17 +900,14 @@ function renderLogin() {
             <h1>Confirm your email to continue.</h1>
             <p>Email verification protects member financial information and coach access.</p>
           </div>
-          <div class="login-footer-meta"><span class="login-caption">Local prototype · Verification email is simulated</span><span>Privacy &amp; Security</span></div>
+          <div class="login-footer-meta"><span class="login-caption">${productionBackend.enabled ? "Secure email verification" : "Local preview · Verification email is simulated"}</span><span>Privacy &amp; Security</span></div>
         </section>
         <section class="login-panel">
           <div class="login-box">
             <p class="eyebrow">Verify email</p>
             <h2>Enter your verification code</h2>
             <p>A verification code was sent to <strong>${escapeHtml(pendingVerificationEmail)}</strong>.</p>
-            <div class="verification-code-preview">
-              <span>Prototype verification code</span>
-              <strong>${escapeHtml(account?.verificationCode || "")}</strong>
-            </div>
+            ${productionBackend.enabled ? "" : `<div class="verification-code-preview"><span>Preview verification code</span><strong>${escapeHtml(account?.verificationCode || "")}</strong></div>`}
             <form id="verification-form" class="form-stack">
               <div class="field">
                 <label for="verification-code">Verification code</label>
@@ -937,7 +936,7 @@ function renderLogin() {
           <h1>Build clarity into every paycheck.</h1>
           <p>One secure place for members and coaches to plan, review, and move forward together.</p>
         </div>
-        <div class="login-footer-meta"><span class="login-caption">Local prototype · Financial data stays in this browser</span><span>Privacy &amp; Security</span></div>
+        <div class="login-footer-meta"><span class="login-caption">${productionBackend.enabled ? "Secure member and coach portal" : "Local preview · Financial data stays in this browser"}</span><span>Privacy &amp; Security</span></div>
       </section>
       <section class="login-panel">
         <div class="login-box">
@@ -969,11 +968,7 @@ function renderLogin() {
             <button class="btn btn-secondary" type="button" data-login-mode="${isSignup ? "signin" : "signup"}">${isSignup ? "Already have an account? Sign in" : "New user? Create an account"}</button>
             ${isSignup ? "" : `<button class="btn btn-secondary" type="button" data-open-verification>Send email verification</button>`}
           </form>
-          <div class="login-demo">or open a demo</div>
-          <div class="demo-buttons">
-            <button class="btn btn-secondary" type="button" data-demo="alex@fitdemo.com">Member demo · demo123</button>
-            <button class="btn btn-secondary" type="button" data-demo="coach@fitdemo.com">Coach demo · demo123</button>
-          </div>
+          ${productionBackend.enabled ? "" : `<div class="login-demo">or open a preview</div><div class="demo-buttons"><button class="btn btn-secondary" type="button" data-demo="alex@fitdemo.com">Member preview · demo123</button><button class="btn btn-secondary" type="button" data-demo="coach@fitdemo.com">Coach preview · demo123</button></div>`}
         </div>
       </section>
     </main>
@@ -1345,7 +1340,7 @@ function paystubVault(account, coachView) {
     <section class="panel profile-vault">
       <div class="panel-heading"><div><h3>Paystub archive</h3><p>Submitted paystubs are organized by date and kept out of the main view.</p></div><span class="badge green">${account.paystubs.length} archived</span></div>
       <div class="panel-body">
-        <div class="vault-notice"><strong>Secure storage standard</strong><span>This prototype stores files in this browser. Production should use encrypted private storage, malware scanning, and server-side authorization.</span></div>
+        <div class="vault-notice"><strong>Secure storage standard</strong><span>${productionBackend.enabled ? "Files are stored in private Supabase Storage and protected by account permissions." : "Local preview files stay in this browser. Production mode uses private Supabase Storage."}</span></div>
         ${
           coachView
             ? ""
@@ -1613,7 +1608,7 @@ function renderCoachConnection() {
           <div><p class="eyebrow">Coach connections</p><h2>Manage mentees</h2><p>Invite members, review requests, and manage active connections.</p></div>
         </div>
         <section class="panel invite-panel">
-          <div class="panel-heading"><div><h3>Invite a mentee</h3><p>Creates a protected prototype invite link for the member email.</p></div><span class="badge">${invites.filter((item) => item.status === "pending").length} pending</span></div>
+          <div class="panel-heading"><div><h3>Invite a mentee</h3><p>${productionBackend.enabled ? "Sends a secure connection invitation to the member email." : "Creates a protected preview invite link for the member email."}</p></div><span class="badge">${invites.filter((item) => item.status === "pending").length} pending</span></div>
           <div class="panel-body">
             <form id="coach-invite-form" class="coach-request-form">
               <div class="field"><label for="mentee-invite-email">Mentee email address</label><input id="mentee-invite-email" class="input" name="email" type="email" required placeholder="member@example.com"></div>
@@ -2931,8 +2926,24 @@ function verificationCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function beginVerification(email) {
+async function beginVerification(email) {
   const normalizedEmail = email.trim().toLowerCase();
+  if (productionBackend.enabled) {
+    if (!normalizedEmail) {
+      showToast("Enter your email address first.");
+      return;
+    }
+    try {
+      await productionBackend.resendVerification(normalizedEmail);
+      pendingVerificationEmail = normalizedEmail;
+      loginMode = "verify";
+      renderLogin();
+      showToast("A new verification code was sent to your email.");
+    } catch (error) {
+      showToast(error.message || "Verification email could not be sent.");
+    }
+    return;
+  }
   const account = appState.accounts[normalizedEmail];
   if (!account) {
     showToast("Create an account before requesting verification.");
@@ -2945,8 +2956,26 @@ function beginVerification(email) {
   renderLogin();
 }
 
-function signIn(email, password, role) {
+async function signIn(email, password, role) {
   const normalizedEmail = email.trim().toLowerCase();
+  if (productionBackend.enabled) {
+    try {
+      const { user } = await productionBackend.signIn({ email: normalizedEmail, password });
+      const registeredRole = user?.user_metadata?.role || "user";
+      if (registeredRole !== role) {
+        await productionBackend.signOut();
+        showToast(`This account is registered as a ${registeredRole === "coach" ? "coach" : "member"}.`);
+        return;
+      }
+      appState = await productionBackend.hydrate();
+      activeView = currentAccount()?.profileCompleted ? "dashboard" : "profile";
+      activeFormId = null;
+      render();
+    } catch (error) {
+      showToast(error.message || "Email, password, or account type is incorrect.");
+    }
+    return;
+  }
   const existing = appState.accounts[normalizedEmail];
   if (!existing || existing.role !== role || existing.password !== password) {
     showToast("Email, password, or account type is incorrect.");
@@ -2968,8 +2997,20 @@ function signIn(email, password, role) {
   render();
 }
 
-function createAccount(name, email, password, role) {
+async function createAccount(name, email, password, role) {
   const normalizedEmail = email.trim().toLowerCase();
+  if (productionBackend.enabled) {
+    try {
+      await productionBackend.signUp({ name: name.trim(), email: normalizedEmail, password, role });
+      pendingVerificationEmail = normalizedEmail;
+      loginMode = "verify";
+      renderLogin();
+      showToast("Verification code sent to your email.");
+    } catch (error) {
+      showToast(error.message || "Account could not be created.");
+    }
+    return;
+  }
   if (appState.accounts[normalizedEmail]) {
     showToast("An account already exists for this email.");
     return;
@@ -3009,7 +3050,7 @@ function createAccount(name, email, password, role) {
   renderLogin();
 }
 
-document.addEventListener("click", (event) => {
+document.addEventListener("click", async (event) => {
   const loginModeButton = event.target.closest("[data-login-mode]");
   if (loginModeButton) {
     loginMode = loginModeButton.dataset.loginMode;
@@ -3032,8 +3073,7 @@ document.addEventListener("click", (event) => {
   }
 
   if (event.target.closest("[data-resend-verification]") && pendingVerificationEmail) {
-    beginVerification(pendingVerificationEmail);
-    showToast("A new prototype verification code was generated.");
+    await beginVerification(pendingVerificationEmail);
     return;
   }
 
@@ -3272,6 +3312,14 @@ document.addEventListener("click", (event) => {
   }
 
   if (event.target.closest("[data-sign-out]")) {
+    if (productionBackend.enabled) {
+      try {
+        await productionBackend.signOut();
+      } catch (error) {
+        showToast(error.message || "Could not sign out.");
+        return;
+      }
+    }
     appState.sessionEmail = null;
     activeView = "dashboard";
     activeFormId = null;
@@ -3364,23 +3412,38 @@ document.addEventListener("click", (event) => {
   }
 });
 
-document.addEventListener("submit", (event) => {
+document.addEventListener("submit", async (event) => {
   if (event.target.id === "login-form") {
     event.preventDefault();
     const data = new FormData(event.target);
-    signIn(data.get("email"), data.get("password"), loginRole);
+    await signIn(data.get("email"), data.get("password"), loginRole);
     return;
   }
 
   if (event.target.id === "signup-form") {
     event.preventDefault();
     const data = new FormData(event.target);
-    createAccount(data.get("name"), data.get("email"), data.get("password"), loginRole);
+    await createAccount(data.get("name"), data.get("email"), data.get("password"), loginRole);
     return;
   }
 
   if (event.target.id === "verification-form") {
     event.preventDefault();
+    if (productionBackend.enabled) {
+      try {
+        const code = new FormData(event.target).get("code").trim();
+        await productionBackend.verifyOtp(pendingVerificationEmail, code);
+        appState = await productionBackend.hydrate();
+        pendingVerificationEmail = null;
+        loginMode = "signin";
+        activeView = "profile";
+        render();
+        showToast("Email verified.");
+      } catch (error) {
+        showToast(error.message || "That verification code does not match.");
+      }
+      return;
+    }
     const account = appState.accounts[pendingVerificationEmail];
     const code = new FormData(event.target).get("code").trim();
     if (!account || account.verificationCode !== code) {
@@ -3425,8 +3488,16 @@ document.addEventListener("submit", (event) => {
       createdAt: new Date().toISOString(),
     });
     saveState();
+    if (productionBackend.enabled) {
+      try {
+        await productionBackend.sendCoachInvite(memberEmail);
+      } catch (error) {
+        showToast(error.message || "Invite saved, but the email could not be sent.");
+        return;
+      }
+    }
     renderCoachConnection();
-    showToast(`Secure prototype invitation created for ${memberEmail}`);
+    showToast(`Secure invitation sent to ${memberEmail}`);
     return;
   }
 
@@ -3644,7 +3715,7 @@ document.addEventListener("input", (event) => {
   refreshLiveAvailable(form);
 });
 
-document.addEventListener("change", (event) => {
+document.addEventListener("change", async (event) => {
   const assetInput = event.target.closest("[data-asset-path]");
   if (assetInput) {
     const account = currentAccount();
@@ -3695,6 +3766,26 @@ document.addEventListener("change", (event) => {
       paystubInput.value = "";
       return;
     }
+    if (productionBackend.enabled) {
+      try {
+        const uploaded = await productionBackend.uploadPrivateFile(
+          "financial-documents",
+          file,
+          "paystubs",
+        );
+        pendingPaystubUpload = {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          ...uploaded,
+        };
+        renderProfile();
+        showToast("Paystub securely uploaded and ready to submit.");
+      } catch (error) {
+        showToast(error.message || "Paystub upload failed.");
+      }
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       pendingPaystubUpload = {
@@ -3716,6 +3807,29 @@ document.addEventListener("change", (event) => {
     const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
     if (!allowedTypes.includes(file.type) || file.size > 1024 * 1024) {
       showToast("Upload a PNG, JPG, or WebP profile photo no larger than 1 MB.");
+      return;
+    }
+    if (productionBackend.enabled) {
+      try {
+        const uploaded = await productionBackend.uploadPrivateFile(
+          "profile-photos",
+          file,
+          "account-holder",
+        );
+        const account = currentAccount();
+        account.profilePhoto = {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+          ...uploaded,
+        };
+        saveState();
+        renderProfile();
+        showToast("Profile photo securely updated.");
+      } catch (error) {
+        showToast(error.message || "Profile photo upload failed.");
+      }
       return;
     }
     const reader = new FileReader();
@@ -3743,6 +3857,29 @@ document.addEventListener("change", (event) => {
     const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
     if (!allowedTypes.includes(file.type) || file.size > 1024 * 1024) {
       showToast("Upload a PNG, JPG, or WebP spouse photo no larger than 1 MB.");
+      return;
+    }
+    if (productionBackend.enabled) {
+      try {
+        const uploaded = await productionBackend.uploadPrivateFile(
+          "profile-photos",
+          file,
+          "spouse",
+        );
+        const account = currentAccount();
+        account.spousePhoto = {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+          ...uploaded,
+        };
+        saveState();
+        renderProfile();
+        showToast("Spouse photo securely updated.");
+      } catch (error) {
+        showToast(error.message || "Spouse photo upload failed.");
+      }
       return;
     }
     const reader = new FileReader();
@@ -3808,4 +3945,17 @@ document.addEventListener("change", (event) => {
   renderEditor();
 });
 
-render();
+async function initializePortal() {
+  if (productionBackend.enabled) {
+    try {
+      const hydrated = await productionBackend.hydrate();
+      if (hydrated) appState = hydrated;
+    } catch (error) {
+      console.error(error);
+      showToast("The secure portal could not connect. Please try again.");
+    }
+  }
+  render();
+}
+
+initializePortal();

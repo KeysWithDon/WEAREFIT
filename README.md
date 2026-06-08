@@ -1,44 +1,143 @@
-# F.I.T. Financial Integrity Training Portal
+# WEAREFIT
 
-Open `index.html` in a browser or serve this folder with a local web server to use the prototype. The interface uses the supplied transparent F.I.T. logo throughout the sign-in experience, dashboards, worksheets, and About page.
+WEAREFIT is the production F.I.T. Financial Integrity Training portal for members and coaches. It uses F.I.T. branding, member onboarding, coach/mentee workflows, financial profiles, worksheets, paystub archives, savings and investment tracking, session reviews, and secure production services through Supabase and Resend.
 
-## Demo accounts
+Live app domain: `https://app.fit-training.org`
 
-- Member: `alex@fitdemo.com` / `demo123`
-- Coach: `coach@fitdemo.com` / `demo123`
+## What is included
 
-The member demo includes one worksheet already sent to the coach demo.
+- Member and coach sign up/sign in with email verification through Supabase Auth.
+- Required member profile setup before financial worksheets can be created.
+- Light mode and dark mode with navy, gold, white, and clean neutral styling.
+- Profile photos for members, spouses, and coaches.
+- Financial profile storage for recurring bills, debts, credit cards, APR details, promotional APR details, savings, investments, and paystubs.
+- Recurring bill autofill into new worksheets without duplicate bills.
+- Spouse assignment for new worksheets.
+- Coach invitation, mentee request, review, approval, and removal workflows.
+- Coach document review with bills to pay now or wait until the next check.
+- Carried-forward mortgage, debt, credit-card, and savings balances after coach approval.
+- Paystub uploads into a private archive instead of the main dashboard.
+- AI-style F.I.T. session review records with coach notes, bills paid, bills left to pay, next steps, and user responses.
+- Church community link to the God Cannot Lie Ministries Facebook page.
 
-## Prototype behavior
+## Production services
 
-- Password-based member and coach sign-in
-- New-account signup with simulated email verification
-- Required profile onboarding before members can create financial worksheets
-- Member and coach profile photos with clean default avatars
-- User-selectable light and dark modes with navy, gold, and white F.I.T. branding
-- Member coach-designation requests and coach approval
-- Coach email invitations, invite status, mentee profile viewing, and non-destructive mentee removal
-- Editable financial worksheets based on the supplied FIT blank template
-- Automatic calculations and browser autosave
-- Available-after-bills updates immediately when contributions, payments, or budget numbers change
-- Form history and new worksheet creation with account-holder or spouse assignment
-- Send-finished-worksheet workflow with a coach review and approval queue
-- Coach bill decisions for this check or the next check
-- Bills marked for the next check automatically carry into the next worksheet
-- Approved mortgage, debt, credit-card, and savings balances carry into new forms
-- Financial profile storage for recurring bills, credit cards, and debts that populate new worksheets
-- Recurring bill categories, including Insurance, with optional monthly schedules and automatic worksheet prefilling
-- Debt APR and promotional-rate tracking
-- Credit card purchase and balance-transfer promotional APR tracking with rate and future-date validation
-- Debt this-check contributions that reduce carried balances
-- Savings progress and coach-visible withdrawal reasons
-- Manual savings and investment accounts with historical balance entries and a combined progress graph
-- Financial profile with marital status, spouse name, employer, pay frequency, balances, and paystub archive
-- Separate F.I.T. AI-style session reviews with coach notes, bill outcomes, action steps, and member feedback
-- Coach cards highlight member name, check date, amount paid, and tithe
-- About page featuring the FIT and God Cannot Lie Ministries logos and program story
-- Church community link in the dashboard footer
+The site is static on GitHub Pages, while private data, account verification, role protection, file storage, and email delivery are handled by Supabase and Resend.
 
-## Production security note
+Do not put the Supabase service-role key or Resend API key in frontend files. Only the Supabase URL and publishable/anon key belong in the browser config.
 
-This is a browser-only prototype. It stores accounts, uploaded-file previews, forms, session reviews, and permissions in the current browser. Email verification, invitations, secure file storage, and AI review generation are simulated locally. A production launch must connect these screens to secure authentication, a hosted database, encrypted private file storage, an email provider, server-side role and ownership checks, rate limiting, audit logging, backups, and a protected server-side AI integration. Never place banking credentials or private API keys in the frontend.
+## Supabase setup
+
+1. Create or open the Supabase project for WEAREFIT.
+2. Open the SQL editor and run:
+
+```sql
+-- supabase/migrations/202606080001_production_portal.sql
+```
+
+3. Confirm these tables exist: `profiles`, `portal_states`, and `email_audit`.
+4. Confirm these private storage buckets exist: `profile-photos` and `financial-documents`.
+5. In Authentication settings, set the site URL to:
+
+```text
+https://app.fit-training.org
+```
+
+6. Add redirect URLs:
+
+```text
+https://app.fit-training.org
+https://god-cannot-lie-ministries.github.io/WEAREFIT/
+```
+
+7. Keep email confirmation enabled so both coach accounts and member accounts receive verification by email.
+
+Supabase recommends custom SMTP for production Auth emails because the default sender is limited and not intended for real users. See the official Supabase SMTP guide: https://supabase.com/docs/guides/auth/auth-smtp
+
+## Resend setup
+
+Use this sending domain:
+
+```text
+notifications.fit-training.org
+```
+
+After Resend verifies the DNS records for that domain, configure Supabase Auth SMTP with the Resend values:
+
+```text
+Host: smtp.resend.com
+Port: 465
+Username: resend
+Password: your Resend API key
+Sender: WEAREFIT <verification@notifications.fit-training.org>
+```
+
+Resend's official Supabase SMTP guide is here: https://resend.com/docs/send-with-supabase-smtp
+
+## Edge Function setup
+
+Deploy the coach invitation email function from the Supabase CLI:
+
+```bash
+supabase link --project-ref YOUR_PROJECT_REF
+supabase functions deploy send-coach-invite
+```
+
+Set the function secrets in Supabase:
+
+```bash
+supabase secrets set RESEND_API_KEY=YOUR_RESEND_API_KEY
+supabase secrets set EMAIL_FROM="WEAREFIT <invites@notifications.fit-training.org>"
+supabase secrets set APP_URL=https://app.fit-training.org
+```
+
+Supabase provides `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` automatically to Edge Functions. Never place the service-role key in the website or GitHub repository. Supabase's function deployment and secrets docs are here:
+
+- https://supabase.com/docs/guides/functions/deploy
+- https://supabase.com/docs/guides/functions/secrets
+
+## GitHub Pages setup
+
+This repo includes a GitHub Pages workflow that creates the live `config.js` during deployment.
+
+In the GitHub repository, add these repository variables:
+
+```text
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
+```
+
+The workflow uses those public values to connect the browser app to Supabase.
+
+## Domain setup
+
+The included `CNAME` file sets the custom app domain to:
+
+```text
+app.fit-training.org
+```
+
+In your DNS provider, add:
+
+```text
+Type: CNAME
+Name: app
+Value: god-cannot-lie-ministries.github.io
+```
+
+Then in GitHub Pages, set the custom domain to `app.fit-training.org` and enable HTTPS after GitHub finishes checking DNS.
+
+## Local preview
+
+Open `index.html` directly or serve this folder locally. The checked-in `config.js` has production disabled, so local preview can still run without Supabase credentials.
+
+To test against Supabase locally, temporarily update `config.js` with your Supabase URL and publishable key, then set `production: true`.
+
+## Security notes
+
+- Row Level Security policies are included for profiles, portal states, email audit records, and private storage.
+- Coaches can only read assigned mentees.
+- Members keep ownership of their data when removed from a coach.
+- Uploaded profile photos and paystubs are stored in private Supabase Storage buckets.
+- The site never asks for bank usernames or bank passwords.
+- Server-only keys must stay in Supabase secrets or GitHub secrets, never in frontend code.
