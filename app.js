@@ -2928,11 +2928,13 @@ function printWorksheetSummary(formId) {
       : member.profile.spouseName
         ? `<span class="person-initials">${initials(member.profile.spouseName)}</span>`
         : "";
-  const report = window.open("", "_blank", "noopener,noreferrer");
+  const report = window.open("", "_blank");
   if (!report) {
     showToast("Allow pop-ups to open the printable PDF summary.");
     return;
   }
+  report.opener = null;
+  report.document.open();
   report.document.write(`<!doctype html><html><head><title>F.I.T. Summary - ${escapeHtml(form.assignedName || member.name)}</title>
     <style>
       @page{size:letter;margin:.55in}*{box-sizing:border-box}body{margin:0;color:#17233a;font:11pt Arial,sans-serif;line-height:1.45}h1,h2,h3{color:#0d2859;margin:0}h1{font-size:22pt}h2{margin:22px 0 9px;border-bottom:2px solid #c99a27;padding-bottom:5px;font-size:15pt}h3{font-size:11pt}.header{display:flex;justify-content:space-between;gap:20px;border-bottom:4px solid #0d2859;padding-bottom:16px}.brand{color:#a87913;font-weight:800;letter-spacing:.08em}.people{display:flex;gap:16px;margin-top:18px}.person{display:flex;align-items:center;gap:10px}.person-photo,.person-initials{width:44px;height:44px;border-radius:50%;object-fit:cover}.person-initials{display:grid;place-items:center;background:#0d2859;color:white;font-weight:bold}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.fact{border:1px solid #d8dee8;padding:9px;break-inside:avoid}.fact span{display:block;color:#68758a;font-size:8pt;text-transform:uppercase}.fact strong{display:block;margin-top:3px}.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{break-inside:avoid}.list{margin:0;padding-left:18px}.note{border-left:4px solid #c99a27;background:#f7f4ec;padding:10px;white-space:pre-wrap}.footer{margin-top:24px;border-top:1px solid #d8dee8;padding-top:8px;color:#68758a;font-size:8pt}@media print{button{display:none}.page-break{break-before:page}}
