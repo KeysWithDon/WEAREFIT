@@ -2,7 +2,9 @@
 
 WEAREFIT is the production F.I.T. Financial Integrity Training portal for members and coaches. It uses F.I.T. branding, member onboarding, coach/mentee workflows, financial profiles, worksheets, paystub archives, savings and investment tracking, session reviews, and secure production services through Supabase and Resend.
 
-Live app domain: `https://app.fit-training.org`
+Live app: `https://god-cannot-lie-ministries.github.io/WEAREFIT/`
+
+The custom domain `https://app.fit-training.org` can replace the GitHub Pages URL after its DNS record resolves.
 
 ## What is included
 
@@ -110,12 +112,6 @@ SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
 The workflow uses those public values to connect the browser app to Supabase.
 
 ## Domain setup
-
-The included `CNAME` file sets the custom app domain to:
-
-```text
-app.fit-training.org
-```
 
 In your DNS provider, add:
 

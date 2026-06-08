@@ -232,6 +232,28 @@
   async function uploadPrivateFile(bucket, file, category) {
     const currentSession = await session();
     if (!currentSession) throw new Error("Sign in before uploading a file.");
+    const supportedTypes = {
+      "profile-photos": ["image/png", "image/jpeg", "image/webp"],
+      "financial-documents": ["application/pdf", "image/png", "image/jpeg"],
+    };
+    const sizeLimits = {
+      "profile-photos": 1024 * 1024,
+      "financial-documents": 2 * 1024 * 1024,
+    };
+    if (!supportedTypes[bucket]?.includes(file.type)) {
+      throw new Error(
+        bucket === "profile-photos"
+          ? "Choose a PNG, JPG, or WebP profile photo."
+          : "Choose a PDF, PNG, or JPG paystub.",
+      );
+    }
+    if (file.size > sizeLimits[bucket]) {
+      throw new Error(
+        bucket === "profile-photos"
+          ? "Profile photos must be 1 MB or smaller."
+          : "Paystubs must be 2 MB or smaller.",
+      );
+    }
     const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
     const safeCategory = category.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
     const path = `${currentSession.user.id}/${safeCategory}/${crypto.randomUUID()}.${extension}`;
@@ -239,7 +261,15 @@
       contentType: file.type,
       upsert: false,
     });
-    if (error) throw error;
+    if (error) {
+      if (/bucket not found/i.test(error.message || "")) {
+        throw new Error("Secure file storage is being configured. Please try again shortly.");
+      }
+      if (/row-level security|policy/i.test(error.message || "")) {
+        throw new Error("Your account does not have permission to upload this file.");
+      }
+      throw error;
+    }
     const { data, error: signedError } = await client.storage.from(bucket).createSignedUrl(path, 3600);
     if (signedError) throw signedError;
     return { storagePath: path, dataUrl: data.signedUrl };

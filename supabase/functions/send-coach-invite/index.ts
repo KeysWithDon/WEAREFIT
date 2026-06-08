@@ -16,7 +16,7 @@ Deno.serve(async (request) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const resendApiKey = Deno.env.get("RESEND_API_KEY")!;
     const emailFrom = Deno.env.get("EMAIL_FROM") || "WEAREFIT <invites@notifications.fit-training.org>";
-    const appUrl = Deno.env.get("APP_URL") || "https://app.fit-training.org";
+    const appUrl = Deno.env.get("APP_URL") || "https://god-cannot-lie-ministries.github.io/WEAREFIT/";
 
     const userClient = createClient(supabaseUrl, publishableKey, {
       global: { headers: { Authorization: authorization } },
