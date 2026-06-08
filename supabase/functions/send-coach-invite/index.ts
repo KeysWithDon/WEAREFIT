@@ -28,6 +28,7 @@ Deno.serve(async (request) => {
     const coachName = typeof metadata.name === "string" && metadata.name.trim()
       ? metadata.name.trim()
       : "Your coach";
+    const coachEmail = authData.user.email?.toLowerCase();
 
     const { memberEmail } = await request.json();
     if (!memberEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberEmail)) {
@@ -48,7 +49,7 @@ Deno.serve(async (request) => {
           <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#152033">
             <h1 style="color:#0d2859">You are invited to WEAREFIT</h1>
             <p>${coachName} invited you to connect as a mentee.</p>
-            <p><a href="${appUrl}" style="display:inline-block;background:#0d2859;color:white;padding:12px 18px;text-decoration:none;border-radius:6px">Open WEAREFIT</a></p>
+            <p><a href="${appUrl}?coachInvite=${encodeURIComponent(coachEmail || "")}" style="display:inline-block;background:#0d2859;color:white;padding:12px 18px;text-decoration:none;border-radius:6px">Accept coach invitation</a></p>
             <p style="font-size:12px;color:#647084">Only accept coaching invitations from people you recognize.</p>
           </div>
         `,

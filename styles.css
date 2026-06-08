@@ -713,7 +713,7 @@ textarea:disabled {
 
 .profile-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: 1fr;
   align-items: start;
   gap: 18px;
 }
@@ -730,7 +730,13 @@ textarea:disabled {
 
 .profile-summary-stack {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.profile-summary-stack .profile-photo-panel,
+.profile-summary-stack .spouse-photo-panel {
+  grid-column: span 3;
 }
 
 .profile-vault {
@@ -1201,6 +1207,40 @@ textarea:disabled {
   display: grid;
   gap: 18px;
   min-width: 0;
+}
+
+.field,
+.panel-body,
+.overview-grid > *,
+.savings-grid > *,
+.debt-entry-grid > *,
+.profile-inventory-grid > * {
+  min-width: 0;
+}
+
+.field label {
+  overflow-wrap: anywhere;
+}
+
+.input,
+.table-input,
+textarea,
+select {
+  max-width: 100%;
+}
+
+.data-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.data-table {
+  min-width: 680px;
+}
+
+.debt-entry,
+.profile-inventory-card {
+  overflow: hidden;
 }
 
 .editor-aside {
@@ -1936,6 +1976,11 @@ textarea:disabled {
   .debt-entry-grid,
   .promo-fields {
     grid-template-columns: 1fr;
+  }
+
+  .profile-summary-stack .profile-photo-panel,
+  .profile-summary-stack .spouse-photo-panel {
+    grid-column: auto;
   }
 
   .request-card,

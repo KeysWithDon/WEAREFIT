@@ -17,6 +17,8 @@ let loginMode = "signin";
 let pendingVerificationEmail = null;
 let toastTimer = null;
 let pendingPaystubUpload = null;
+const inviteCoachFromUrl = new URLSearchParams(window.location.search).get("coachInvite");
+if (inviteCoachFromUrl) localStorage.setItem("fit-pending-coach-invite", inviteCoachFromUrl.toLowerCase());
 
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
@@ -149,6 +151,7 @@ function ensureAccountModel(account) {
   account.profile.payFrequency ||= "";
   account.profilePhoto ||= null;
   account.spousePhoto ||= null;
+  account.coachName ||= "";
   account.profileCompleted = Object.hasOwn(account, "profileCompleted")
     ? Boolean(account.profileCompleted)
     : true;
@@ -662,6 +665,21 @@ async function saveFinancialProfileNow() {
 
 function currentAccount() {
   return appState.accounts[appState.sessionEmail] || null;
+}
+
+async function completePendingCoachInvite() {
+  if (!productionBackend.enabled) return;
+  const coachEmail = localStorage.getItem("fit-pending-coach-invite");
+  const member = currentAccount();
+  if (!coachEmail || !member || member.role !== "user") return;
+  const result = await productionBackend.connectCoach(coachEmail);
+  member.coachEmail = result.coachEmail;
+  member.coachName = result.coachName || "F.I.T. coach";
+  member.coachRequestStatus = "pending";
+  localStorage.removeItem("fit-pending-coach-invite");
+  window.history.replaceState({}, "", window.location.pathname);
+  saveState();
+  showToast("Coach invitation connected. Your coach can now approve the relationship.");
 }
 
 function money(value) {
@@ -1726,16 +1744,16 @@ function renderCoachConnection() {
             : ""
         }
         ${
-          coach && account.coachRequestStatus === "approved"
+          account.coachEmail && account.coachRequestStatus === "approved"
             ? `<div class="connection-current">
-                ${avatarMarkup(coach)}
-                <div><p class="eyebrow">Connected coach</p><h3>${escapeHtml(coach.name)}</h3><p>${escapeHtml(coach.email)}</p></div>
+                ${avatarMarkup(coach || account.coachName || account.coachEmail)}
+                <div><p class="eyebrow">Connected coach</p><h3>${escapeHtml(coach?.name || account.coachName || "F.I.T. coach")}</h3><p>${escapeHtml(account.coachEmail)}</p></div>
                 <span class="badge green">Approved</span>
               </div>`
             : account.coachEmail
               ? `<div class="connection-current">
                   ${avatarMarkup(coach || account.coachEmail)}
-                  <div><p class="eyebrow">Coach request</p><h3>${escapeHtml(coach?.name || "Pending coach")}</h3><p>${escapeHtml(account.coachEmail)}</p></div>
+                  <div><p class="eyebrow">Coach request</p><h3>${escapeHtml(coach?.name || account.coachName || "Pending coach")}</h3><p>${escapeHtml(account.coachEmail)}</p></div>
                   <span class="badge">${escapeHtml(account.coachRequestStatus || "pending")}</span>
                 </div>`
               : `<div class="empty-connection"><h3>No coach designated</h3><p>Enter your coach's account email to send a connection request.</p></div>`
@@ -2184,7 +2202,8 @@ function memberFormCard(form) {
       </div>
       <div class="button-row">
         <button class="btn btn-primary btn-small" type="button" data-open-form="${form.id}">Open</button>
-        <button class="btn btn-secondary btn-small" type="button" data-share-form="${form.id}"><span aria-hidden="true">↗</span> Send to coach</button>
+        ${currentAccount()?.coachEmail && currentAccount()?.coachRequestStatus === "approved" ? `<button class="btn btn-secondary btn-small" type="button" data-share-form="${form.id}"><span aria-hidden="true">↗</span> Send to coach</button>` : ""}
+        <button class="btn btn-secondary btn-small" type="button" data-print-form="${form.id}">Print PDF</button>
         <button class="icon-btn danger" type="button" title="Delete form" aria-label="Delete form" data-delete-form="${form.id}">×</button>
       </div>
     </article>
@@ -2291,9 +2310,11 @@ function renderEditor() {
   const calc = calculate(form);
   const actions = readOnly
     ? `${isCoachReview ? `<button class="btn btn-gold" type="button" data-approve-form="${form.id}">Complete session & approve</button>` : ""}
+       <button class="btn btn-secondary" type="button" data-print-form="${form.id}">Print PDF</button>
        <button class="btn btn-secondary" type="button" data-view="dashboard">Back to coach workspace</button>`
     : `
-      <button class="btn btn-gold" type="button" data-share-form="${form.id}"><span aria-hidden="true">↗</span> Send to coach</button>
+      ${account.coachEmail && account.coachRequestStatus === "approved" ? `<button class="btn btn-gold" type="button" data-share-form="${form.id}"><span aria-hidden="true">↗</span> Send to coach</button>` : ""}
+      <button class="btn btn-secondary" type="button" data-print-form="${form.id}">Print PDF</button>
       <button class="btn btn-primary" type="button" data-view="dashboard">Done</button>
     `;
 
@@ -2345,10 +2366,15 @@ function renderEditor() {
 }
 
 function overviewPanel(form, calc, readOnly) {
+  const owner = appState.accounts[form.ownerEmail];
+  const assignedAvatar =
+    form.assignedPerson === "spouse" && owner
+      ? spouseAvatarMarkup(owner, "avatar-lg")
+      : avatarMarkup(owner || form.ownerName, "avatar-lg");
   return `
     <section class="panel" id="overview">
       <div class="panel-heading">
-        <div><h3>Paycheck overview</h3><p>Income and bill summary for this worksheet</p></div>
+        <div class="profile-heading-person">${assignedAvatar}<div><h3>Paycheck overview</h3><p>${escapeHtml(form.assignedName || form.ownerName)} · Income and bill summary</p></div></div>
         <span class="autosave"><span class="autosave-dot"></span>${readOnly ? "Read only" : "Autosaved"}</span>
       </div>
       <div class="panel-body overview-grid">
@@ -2819,7 +2845,7 @@ function showNewFormModal() {
       <div class="modal-body">
         <form id="new-form-assignment-form" class="form-stack">
           <label class="assignment-choice"><input type="radio" name="assignedPerson" value="account_holder" checked><span>${avatarMarkup(account)}<strong>${escapeHtml(account.name)}</strong><small>Account holder</small></span></label>
-          <label class="assignment-choice"><input type="radio" name="assignedPerson" value="spouse"><span>${avatarMarkup(account.profile.spouseName)}<strong>${escapeHtml(account.profile.spouseName)}</strong><small>Spouse</small></span></label>
+          <label class="assignment-choice"><input type="radio" name="assignedPerson" value="spouse"><span>${spouseAvatarMarkup(account)}<strong>${escapeHtml(account.profile.spouseName)}</strong><small>Spouse</small></span></label>
           <button class="btn btn-primary" type="submit">Create assigned worksheet</button>
         </form>
       </div>
@@ -2833,7 +2859,7 @@ function showShareModal(formId) {
   if (!form) return;
   const account = currentAccount();
   const coach = account.coachEmail ? appState.accounts[account.coachEmail] : null;
-  const canSend = coach && account.coachRequestStatus === "approved";
+  const canSend = account.coachEmail && account.coachRequestStatus === "approved";
 
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
@@ -2849,11 +2875,11 @@ function showShareModal(formId) {
         ${
           canSend
             ? `<div class="share-person designated-coach">
-                <div><strong>${escapeHtml(coach.name)}</strong><span>${escapeHtml(coach.email)} · Designated coach</span></div>
+                <div><strong>${escapeHtml(coach?.name || account.coachName || "F.I.T. coach")}</strong><span>${escapeHtml(account.coachEmail)} · Designated coach</span></div>
                 <span class="badge green">Connected</span>
               </div>
               <form id="share-form" class="form-stack">
-                <input type="hidden" name="email" value="${escapeHtml(coach.email)}">
+                <input type="hidden" name="email" value="${escapeHtml(account.coachEmail)}">
                 <button class="btn btn-primary" type="submit">Send for coach review <span aria-hidden="true">↗</span></button>
               </form>`
             : `<div class="empty-connection">
@@ -2867,6 +2893,76 @@ function showShareModal(formId) {
   `;
   modal.dataset.formId = formId;
   document.body.appendChild(modal);
+}
+
+function printList(items, emptyText = "None recorded") {
+  return items.length
+    ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+    : `<p>${escapeHtml(emptyText)}</p>`;
+}
+
+function printWorksheetSummary(formId) {
+  const form = appState.forms[formId];
+  const member = form ? appState.accounts[form.ownerEmail] : null;
+  if (!form || !member) {
+    showToast("That worksheet is not available to print.");
+    return;
+  }
+  const calc = calculate(form);
+  const latestSession = appState.sessions
+    .filter((session) => session.formId === form.id)
+    .sort((a, b) => new Date(b.sessionDate) - new Date(a.sessionDate))[0];
+  const bills = Object.values(form.data.bills).flat().filter((bill) => bill.name);
+  const billsPaid = bills
+    .filter((bill) => bill.coachDecision === "this_check")
+    .map((bill) => `${bill.name} - ${money(bill.amount)}`);
+  const billsRemaining = bills
+    .filter((bill) => bill.coachDecision !== "this_check")
+    .map((bill) => `${bill.name} - ${money(bill.amount)}`);
+  const savingsAccounts = member.savingsInvestmentAccounts.filter((item) => item.type === "savings");
+  const investments = member.savingsInvestmentAccounts.filter((item) => item.type === "investment");
+  const debts = form.data.debts.filter((debt) => debt.account);
+  const spouseVisual =
+    member.profile.spouseName && member.spousePhoto?.dataUrl
+      ? `<img class="person-photo" src="${member.spousePhoto.dataUrl}" alt="${escapeHtml(member.profile.spouseName)}">`
+      : member.profile.spouseName
+        ? `<span class="person-initials">${initials(member.profile.spouseName)}</span>`
+        : "";
+  const report = window.open("", "_blank", "noopener,noreferrer");
+  if (!report) {
+    showToast("Allow pop-ups to open the printable PDF summary.");
+    return;
+  }
+  report.document.write(`<!doctype html><html><head><title>F.I.T. Summary - ${escapeHtml(form.assignedName || member.name)}</title>
+    <style>
+      @page{size:letter;margin:.55in}*{box-sizing:border-box}body{margin:0;color:#17233a;font:11pt Arial,sans-serif;line-height:1.45}h1,h2,h3{color:#0d2859;margin:0}h1{font-size:22pt}h2{margin:22px 0 9px;border-bottom:2px solid #c99a27;padding-bottom:5px;font-size:15pt}h3{font-size:11pt}.header{display:flex;justify-content:space-between;gap:20px;border-bottom:4px solid #0d2859;padding-bottom:16px}.brand{color:#a87913;font-weight:800;letter-spacing:.08em}.people{display:flex;gap:16px;margin-top:18px}.person{display:flex;align-items:center;gap:10px}.person-photo,.person-initials{width:44px;height:44px;border-radius:50%;object-fit:cover}.person-initials{display:grid;place-items:center;background:#0d2859;color:white;font-weight:bold}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.fact{border:1px solid #d8dee8;padding:9px;break-inside:avoid}.fact span{display:block;color:#68758a;font-size:8pt;text-transform:uppercase}.fact strong{display:block;margin-top:3px}.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{break-inside:avoid}.list{margin:0;padding-left:18px}.note{border-left:4px solid #c99a27;background:#f7f4ec;padding:10px;white-space:pre-wrap}.footer{margin-top:24px;border-top:1px solid #d8dee8;padding-top:8px;color:#68758a;font-size:8pt}@media print{button{display:none}.page-break{break-before:page}}
+    </style></head><body>
+    <header class="header"><div><div class="brand">F.I.T. FINANCIAL INTEGRITY TRAINING</div><h1>Financial Summary</h1><p>${escapeHtml(form.title)}</p></div><div><strong>Created</strong><br>${escapeHtml(dateLabel(form.createdAt.slice(0,10)))}</div></header>
+    <div class="people"><div class="person">${avatarMarkup(member, "person-initials")}<div><strong>${escapeHtml(member.name)}</strong><br><span>Account holder</span></div></div>${member.profile.spouseName ? `<div class="person">${spouseVisual}<div><strong>${escapeHtml(member.profile.spouseName)}</strong><br><span>Spouse</span></div></div>` : ""}</div>
+    <h2>Household and income</h2><div class="grid">
+      <div class="fact"><span>Assigned person</span><strong>${escapeHtml(form.assignedName || member.name)}</strong></div>
+      <div class="fact"><span>Employer</span><strong>${escapeHtml(member.profile.employer || "Not provided")}</strong></div>
+      <div class="fact"><span>Pay frequency</span><strong>${escapeHtml(member.profile.payFrequency || "Not provided")}</strong></div>
+      <div class="fact"><span>Check date</span><strong>${escapeHtml(dateLabel(form.data.overview.checkDate))}</strong></div>
+      <div class="fact"><span>This check</span><strong>${money(calc.thisCheck)}</strong></div>
+      <div class="fact"><span>Tithe</span><strong>${money(calc.tithe)}</strong></div>
+      <div class="fact"><span>Planned outflow</span><strong>${money(calc.totalBills)}</strong></div>
+      <div class="fact"><span>Available after plan</span><strong>${money(calc.available)}</strong></div>
+      <div class="fact"><span>Remaining debt</span><strong>${money(calc.totalDebt)}</strong></div>
+    </div>
+    <div class="two"><section class="section"><h2>Bills paid</h2>${printList(billsPaid)}</section><section class="section"><h2>Bills remaining</h2>${printList(billsRemaining)}</section></div>
+    <h2>Savings and assets</h2><div class="grid">
+      <div class="fact"><span>Worksheet savings</span><strong>${money(calc.savingsAfter)}</strong></div>
+      <div class="fact"><span>Profile savings</span><strong>${money(profileSavingsTotal(member))}</strong></div>
+      <div class="fact"><span>Investment assets</span><strong>${money(profileInvestmentTotal(member))}</strong></div>
+    </div>
+    <div class="two"><section class="section"><h2>Savings accounts</h2>${printList(savingsAccounts.map((item) => `${item.name || "Savings"} - ${money(item.balance)}`))}</section><section class="section"><h2>Investment accounts</h2>${printList(investments.map((item) => `${item.name || "Investment"} - ${money(item.balance)}`))}</section></div>
+    <section class="section"><h2>Remaining debt</h2>${printList(debts.map((debt) => `${debt.account} - ${money(debt.totalOwed)}${debt.apr ? ` at ${debt.apr}% APR` : ""}`))}</section>
+    <section class="section"><h2>Worksheet notes</h2><div class="note">${escapeHtml(form.data.notes || "No worksheet notes.")}</div></section>
+    ${latestSession ? `<section class="page-break"><h2>Coach notes</h2><div class="note">${escapeHtml(latestSession.coachNotes || "No coach notes.")}</div><h2>F.I.T. session review</h2><div class="note">${escapeHtml(latestSession.aiSummary || "No session review.")}</div><h2>Next steps</h2><div class="note">${escapeHtml(latestSession.actionSteps || "No action steps recorded.")}</div></section>` : ""}
+    <footer class="footer">F.I.T. was created by Pastor A. Griffith of God Cannot Lie Ministries.</footer>
+    <script>window.addEventListener("load",()=>setTimeout(()=>window.print(),300));<\/script></body></html>`);
+  report.document.close();
 }
 
 function showWithdrawalModal(formId) {
@@ -3028,6 +3124,7 @@ async function signIn(email, password, role) {
         return;
       }
       appState = await productionBackend.hydrate();
+      await completePendingCoachInvite();
       activeView = currentAccount()?.profileCompleted ? "dashboard" : "profile";
       activeFormId = null;
       render();
@@ -3421,6 +3518,12 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const printButton = event.target.closest("[data-print-form]");
+  if (printButton) {
+    printWorksheetSummary(printButton.dataset.printForm);
+    return;
+  }
+
   const deleteButton = event.target.closest("[data-delete-form]");
   if (deleteButton) {
     const form = appState.forms[deleteButton.dataset.deleteForm];
@@ -3570,8 +3673,28 @@ document.addEventListener("submit", async (event) => {
     event.preventDefault();
     const member = currentAccount();
     const coachEmail = new FormData(event.target).get("email").trim().toLowerCase();
-    const coach = appState.accounts[coachEmail];
-    if (!coach || coach.role !== "coach") {
+    let coach = appState.accounts[coachEmail];
+    if (productionBackend.enabled) {
+      try {
+        const result = await productionBackend.connectCoach(coachEmail);
+        coach = {
+          name: result.coachName || "F.I.T. coach",
+          email: result.coachEmail,
+          role: "coach",
+          profilePhoto: null,
+        };
+        appState.accounts[coach.email] = coach;
+        member.coachName = coach.name;
+      } catch (error) {
+        coach = {
+          name: "F.I.T. coach",
+          email: coachEmail,
+          role: "coach",
+          profilePhoto: null,
+        };
+        member.coachName = coach.name;
+      }
+    } else if (!coach || coach.role !== "coach") {
       showToast("No coach account exists for that email yet.");
       return;
     }
@@ -3587,11 +3710,11 @@ document.addEventListener("submit", async (event) => {
       status: "pending",
       createdAt: new Date().toISOString(),
     });
-    member.coachEmail = coachEmail;
+    member.coachEmail = coach.email;
     member.coachRequestStatus = "pending";
     saveState();
     renderCoachConnection();
-    showToast(`Coach request sent to ${coachEmail}`);
+    showToast(`Coach request sent to ${coach.email}`);
     return;
   }
 
@@ -3698,6 +3821,11 @@ document.addEventListener("submit", async (event) => {
     const modal = event.target.closest(".modal-backdrop");
     const form = appState.forms[modal.dataset.formId];
     const email = new FormData(event.target).get("email").trim().toLowerCase();
+    const account = currentAccount();
+    if (email !== account.coachEmail || account.coachRequestStatus !== "approved") {
+      showToast("Connect with an approved coach before sharing this worksheet.");
+      return;
+    }
     form.sharedWith = [email];
     form.status = "submitted";
     form.submittedAt = new Date().toISOString();

@@ -229,6 +229,14 @@
     return data;
   }
 
+  async function connectCoach(coachEmail, invite = null) {
+    const { data, error } = await client.functions.invoke("connect-coach", {
+      body: { coachEmail, invite },
+    });
+    if (error) throw error;
+    return data;
+  }
+
   async function uploadPrivateFile(bucket, file, category) {
     const currentSession = await session();
     if (!currentSession) throw new Error("Sign in before uploading a file.");
@@ -288,6 +296,7 @@
     resendVerification,
     signOut,
     sendCoachInvite,
+    connectCoach,
     uploadPrivateFile,
   };
 })();
