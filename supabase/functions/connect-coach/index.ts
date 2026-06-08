@@ -25,6 +25,7 @@ Deno.serve(async (request) => {
     }
 
     const body = await request.json();
+    const acceptedCoachInvite = body.invite === true;
     const coachEmail = String(body.coachEmail || "").trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(coachEmail)) {
       throw new Error("Enter a valid coach email.");
@@ -52,7 +53,7 @@ Deno.serve(async (request) => {
     const coachName = coachAccount.name || "F.I.T. coach";
     member.coachEmail = coachEmail;
     member.coachName = coachName;
-    member.coachRequestStatus = "pending";
+    member.coachRequestStatus = acceptedCoachInvite ? "approved" : "pending";
     state.accounts = { ...(state.accounts || {}), [memberEmail]: member };
     state.coachRequests = (state.coachRequests || []).map((item: Record<string, unknown>) =>
       item.memberEmail === memberEmail && item.status === "pending"
@@ -63,8 +64,9 @@ Deno.serve(async (request) => {
       id: crypto.randomUUID(),
       memberEmail,
       coachEmail,
-      status: "pending",
+      status: acceptedCoachInvite ? "approved" : "pending",
       createdAt: new Date().toISOString(),
+      respondedAt: acceptedCoachInvite ? new Date().toISOString() : null,
     });
 
     const { error: updateError } = await adminClient

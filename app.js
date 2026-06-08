@@ -672,14 +672,14 @@ async function completePendingCoachInvite() {
   const coachEmail = localStorage.getItem("fit-pending-coach-invite");
   const member = currentAccount();
   if (!coachEmail || !member || member.role !== "user") return;
-  const result = await productionBackend.connectCoach(coachEmail);
+  const result = await productionBackend.connectCoach(coachEmail, true);
   member.coachEmail = result.coachEmail;
   member.coachName = result.coachName || "F.I.T. coach";
-  member.coachRequestStatus = "pending";
+  member.coachRequestStatus = "approved";
   localStorage.removeItem("fit-pending-coach-invite");
   window.history.replaceState({}, "", window.location.pathname);
   saveState();
-  showToast("Coach invitation connected. Your coach can now approve the relationship.");
+  showToast("Coach invitation accepted. You are now connected.");
 }
 
 function money(value) {
