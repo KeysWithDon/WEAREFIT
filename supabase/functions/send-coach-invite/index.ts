@@ -13,7 +13,6 @@ Deno.serve(async (request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const publishableKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const resendApiKey = Deno.env.get("RESEND_API_KEY")!;
     const emailFrom = Deno.env.get("EMAIL_FROM") || "WEAREFIT <invites@notifications.fit-training.org>";
     const appUrl = Deno.env.get("APP_URL") || "https://fit-training.org/";
@@ -21,16 +20,14 @@ Deno.serve(async (request) => {
     const userClient = createClient(supabaseUrl, publishableKey, {
       global: { headers: { Authorization: authorization } },
     });
-    const adminClient = createClient(supabaseUrl, serviceRoleKey);
     const { data: authData, error: authError } = await userClient.auth.getUser();
     if (authError || !authData.user) throw new Error("Authentication required.");
 
-    const { data: profile } = await adminClient
-      .from("profiles")
-      .select("full_name, role")
-      .eq("id", authData.user.id)
-      .single();
-    if (profile?.role !== "coach") throw new Error("Only coach accounts can send mentee invitations.");
+    const metadata = authData.user.user_metadata || {};
+    if (metadata.role !== "coach") throw new Error("Only coach accounts can send mentee invitations.");
+    const coachName = typeof metadata.name === "string" && metadata.name.trim()
+      ? metadata.name.trim()
+      : "Your coach";
 
     const { memberEmail } = await request.json();
     if (!memberEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberEmail)) {
@@ -46,11 +43,11 @@ Deno.serve(async (request) => {
       body: JSON.stringify({
         from: emailFrom,
         to: [memberEmail],
-        subject: `${profile.full_name || "Your coach"} invited you to WEAREFIT`,
+        subject: `${coachName} invited you to WEAREFIT`,
         html: `
           <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#152033">
             <h1 style="color:#0d2859">You are invited to WEAREFIT</h1>
-            <p>${profile.full_name || "A F.I.T. coach"} invited you to connect as a mentee.</p>
+            <p>${coachName} invited you to connect as a mentee.</p>
             <p><a href="${appUrl}" style="display:inline-block;background:#0d2859;color:white;padding:12px 18px;text-decoration:none;border-radius:6px">Open WEAREFIT</a></p>
             <p style="font-size:12px;color:#647084">Only accept coaching invitations from people you recognize.</p>
           </div>
@@ -59,14 +56,6 @@ Deno.serve(async (request) => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || "Email provider rejected the invitation.");
-
-    await adminClient.from("email_audit").insert({
-      actor_id: authData.user.id,
-      email_type: "coach_invite",
-      recipient: memberEmail.toLowerCase(),
-      provider_id: result.id,
-      status: "sent",
-    });
 
     return new Response(JSON.stringify({ ok: true, id: result.id }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
