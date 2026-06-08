@@ -147,6 +147,7 @@ function ensureAccountModel(account) {
   account.profile.employer ||= "";
   account.profile.payFrequency ||= "";
   account.profilePhoto ||= null;
+  account.spousePhoto ||= null;
   account.profileCompleted = Object.hasOwn(account, "profileCompleted")
     ? Boolean(account.profileCompleted)
     : true;
@@ -655,6 +656,14 @@ function dateLabel(value) {
   }).format(new Date(`${value}T12:00:00`));
 }
 
+function monthYearLabel(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    year: "numeric",
+  }).format(new Date(`${value}T12:00:00`));
+}
+
 function updatedLabel(value) {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
@@ -689,6 +698,13 @@ function avatarMarkup(accountOrName, className = "") {
     return `<span class="avatar avatar-photo ${className}"><img src="${account.profilePhoto.dataUrl}" alt="${escapeHtml(account.name)} profile photo"></span>`;
   }
   return `<span class="avatar ${className}">${initials(account?.name || "FIT")}</span>`;
+}
+
+function spouseAvatarMarkup(account, className = "") {
+  if (account?.spousePhoto?.dataUrl) {
+    return `<span class="avatar avatar-photo ${className}"><img src="${account.spousePhoto.dataUrl}" alt="${escapeHtml(account.profile.spouseName)} profile photo"></span>`;
+  }
+  return `<span class="avatar ${className}">${initials(account?.profile?.spouseName || "Spouse")}</span>`;
 }
 
 function memberForms(email) {
@@ -882,7 +898,7 @@ function renderLogin() {
             <h1>Confirm your email to continue.</h1>
             <p>Email verification protects member financial information and coach access.</p>
           </div>
-          <span class="login-caption">Local prototype · Verification email is simulated</span>
+          <div class="login-footer-meta"><span class="login-caption">Local prototype · Verification email is simulated</span><span>Privacy &amp; Security</span></div>
         </section>
         <section class="login-panel">
           <div class="login-box">
@@ -921,7 +937,7 @@ function renderLogin() {
           <h1>Build clarity into every paycheck.</h1>
           <p>One secure place for members and coaches to plan, review, and move forward together.</p>
         </div>
-        <span class="login-caption">Local prototype · Financial data stays in this browser</span>
+        <div class="login-footer-meta"><span class="login-caption">Local prototype · Financial data stays in this browser</span><span>Privacy &amp; Security</span></div>
       </section>
       <section class="login-panel">
         <div class="login-box">
@@ -1021,10 +1037,6 @@ function shell(content, options = {}) {
               <span>${account.role}</span>
             </div>
           </div>
-          <button class="nav-btn" type="button" data-sign-out>
-            <span class="nav-glyph" aria-hidden="true">↪</span>
-            Sign out
-          </button>
         </div>
       </aside>
       <main class="main">
@@ -1034,7 +1046,10 @@ function shell(content, options = {}) {
             <h1>${escapeHtml(pageTitle)}</h1>
             <p>${escapeHtml(pageSubtitle)}</p>
           </div>
-          <div class="button-row">${topActions}</div>
+          <div class="button-row topbar-actions">
+            ${topActions}
+            <button class="btn btn-secondary btn-small topbar-signout" type="button" data-sign-out aria-label="Sign out">Sign out</button>
+          </div>
         </header>
         ${
           !account.profileCompleted
@@ -1101,6 +1116,7 @@ function renderProfile() {
         ${personalProfilePanel(account)}
         <aside class="profile-summary-stack">
           ${profilePhotoPanel(account, true)}
+          ${account.profile.maritalStatus === "married" ? spousePhotoPanel(account, true) : ""}
           ${metric("Current savings", money(currentSavings))}
           ${metric("Tracked assets", money(assetTotal))}
           ${metric("Remaining debt", money(totalDebt))}
@@ -1187,6 +1203,21 @@ function profilePhotoPanel(account, canEdit) {
   `;
 }
 
+function spousePhotoPanel(account, canEdit) {
+  return `
+    <section class="profile-photo-panel spouse-photo-panel">
+      ${spouseAvatarMarkup(account, "avatar-xl")}
+      <div><strong>${escapeHtml(account.profile.spouseName || "Spouse")}</strong><span>Spouse profile photo</span></div>
+      ${
+        canEdit
+          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-spouse-photo-upload accept=".png,.jpg,.jpeg,.webp">Upload spouse photo</label>
+             ${account.spousePhoto ? `<button class="btn btn-quiet btn-small" type="button" data-remove-spouse-photo>Use default avatar</button>` : ""}`
+          : ""
+      }
+    </section>
+  `;
+}
+
 function emptyInline(title, description) {
   return `<div class="inline-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(description)}</span></div>`;
 }
@@ -1238,11 +1269,17 @@ function assetHistoryChart(accounts) {
     return emptyInline("No savings or investment history yet", "Update an account balance to create the first graph entry.");
   }
   const dates = [...new Set(datedEntries.map((entry) => entry.date))].sort();
+  const accountPalette = ["#16825d", "#315fc4", "#c25d24", "#7b4bb7", "#008aa6", "#b33f72", "#7a761c", "#5b6f91"];
+  const colorForAccount = (account, index) => {
+    const seed = [...String(account.id || account.name || index)].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+    return accountPalette[seed % accountPalette.length];
+  };
   const series = accounts
     .filter((account) => account.history.length)
-    .map((account) => ({
+    .map((account, index) => ({
       name: account.name || (account.type === "investment" ? "Investment" : "Savings"),
       type: account.type,
+      color: colorForAccount(account, index),
       values: dates.map((date) => {
         const latest = account.history
           .filter((entry) => entry.date <= date)
@@ -1254,36 +1291,50 @@ function assetHistoryChart(accounts) {
   series.push({
     name: "Combined",
     type: "combined",
+    color: "#d9a62e",
     values: dates.map((_, index) => series.reduce((sum, item) => sum + item.values[index], 0)),
   });
-  const max = Math.max(1, ...series.flatMap((item) => item.values));
+  const rawMax = Math.max(1, ...series.flatMap((item) => item.values));
+  const scaleStep = rawMax > 20000 ? 5000 : 1000;
+  const max = Math.max(scaleStep, Math.ceil(rawMax / scaleStep) * scaleStep);
   const width = 720;
-  const height = 250;
-  const padX = 44;
-  const padY = 30;
-  const plotWidth = width - padX * 2;
-  const plotHeight = height - padY * 2;
-  const color = { savings: "#1f9d6a", investment: "#4b73d1", combined: "#d9a62e" };
+  const height = 300;
+  const padLeft = 72;
+  const padRight = 24;
+  const padTop = 28;
+  const padBottom = 52;
+  const plotWidth = width - padLeft - padRight;
+  const plotHeight = height - padTop - padBottom;
+  const yTicks = Array.from({ length: Math.floor(max / scaleStep) + 1 }, (_, index) => index * scaleStep);
+  const visibleDateIndexes = dates.length <= 5
+    ? dates.map((_, index) => index)
+    : [0, Math.floor((dates.length - 1) / 2), dates.length - 1];
   const pointsFor = (values) =>
     values
       .map((value, index) => {
-        const x = padX + (dates.length === 1 ? plotWidth / 2 : (index / (dates.length - 1)) * plotWidth);
-        const y = padY + plotHeight - (value / max) * plotHeight;
+        const x = padLeft + (dates.length === 1 ? plotWidth / 2 : (index / (dates.length - 1)) * plotWidth);
+        const y = padTop + plotHeight - (value / max) * plotHeight;
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(" ");
   return `
-    <div class="chart-legend">${series.map((item) => `<span><i style="background:${color[item.type]}"></i>${escapeHtml(item.name)} · ${money(item.values.at(-1))}</span>`).join("")}</div>
+    <div class="chart-legend">${series.map((item) => `<span><i style="background:${item.color}"></i>${escapeHtml(item.name)} · ${money(item.values.at(-1))}</span>`).join("")}</div>
     <svg class="asset-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Savings and investment account history">
-      ${[0, 0.25, 0.5, 0.75, 1].map((ratio) => `<line x1="${padX}" y1="${padY + ratio * plotHeight}" x2="${width - padX}" y2="${padY + ratio * plotHeight}" class="chart-grid-line"></line>`).join("")}
-      ${series.map((item) => `<polyline points="${pointsFor(item.values)}" fill="none" stroke="${color[item.type]}" stroke-width="${item.type === "combined" ? 4 : 2.5}" stroke-linecap="round" stroke-linejoin="round"></polyline>`).join("")}
+      ${yTicks.map((value) => {
+        const y = padTop + plotHeight - (value / max) * plotHeight;
+        return `<line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}" class="chart-grid-line"></line><text x="${padLeft - 10}" y="${y + 4}" text-anchor="end" class="chart-axis-label">${money(value)}</text>`;
+      }).join("")}
+      ${series.map((item) => `<polyline points="${pointsFor(item.values)}" fill="none" stroke="${item.color}" stroke-width="${item.type === "combined" ? 4 : 2.75}" stroke-linecap="round" stroke-linejoin="round"></polyline>`).join("")}
       ${series.map((item) => item.values.map((value, index) => {
-        const x = padX + (dates.length === 1 ? plotWidth / 2 : (index / (dates.length - 1)) * plotWidth);
-        const y = padY + plotHeight - (value / max) * plotHeight;
-        return `<circle cx="${x}" cy="${y}" r="${item.type === "combined" ? 4 : 3}" fill="${color[item.type]}"><title>${escapeHtml(item.name)} · ${dateLabel(dates[index])} · ${money(value)}</title></circle>`;
+        const x = padLeft + (dates.length === 1 ? plotWidth / 2 : (index / (dates.length - 1)) * plotWidth);
+        const y = padTop + plotHeight - (value / max) * plotHeight;
+        return `<circle cx="${x}" cy="${y}" r="${item.type === "combined" ? 4.5 : 3.5}" fill="${item.color}"><title>${escapeHtml(item.name)} · ${dateLabel(dates[index])} · ${money(value)}</title></circle>`;
       }).join("")).join("")}
-      <text x="${padX}" y="${height - 5}" class="chart-date">${escapeHtml(dateLabel(dates[0]))}</text>
-      <text x="${width - padX}" y="${height - 5}" text-anchor="end" class="chart-date">${escapeHtml(dateLabel(dates.at(-1)))}</text>
+      ${visibleDateIndexes.map((index) => {
+        const x = padLeft + (dates.length === 1 ? plotWidth / 2 : (index / (dates.length - 1)) * plotWidth);
+        return `<text x="${x}" y="${height - 18}" text-anchor="middle" class="chart-date">${escapeHtml(monthYearLabel(dates[index]))}</text>`;
+      }).join("")}
+      <text x="${padLeft + plotWidth / 2}" y="${height - 2}" text-anchor="middle" class="chart-axis-title">Balance history by month and year</text>
     </svg>
   `;
 }
@@ -1375,6 +1426,11 @@ function showMenteeProfileModal(email) {
     <section class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="mentee-profile-title">
       <div class="modal-header"><div class="profile-heading-person">${avatarMarkup(member, "avatar-lg")}<div><h3 id="mentee-profile-title">${escapeHtml(member.name)}</h3><p>${escapeHtml(member.email)}</p></div></div><button class="icon-btn" type="button" aria-label="Close" data-close-modal>×</button></div>
       <div class="modal-body">
+        ${
+          member.profile.maritalStatus === "married"
+            ? `<div class="household-photo-row"><div>${avatarMarkup(member, "avatar-lg")}<span>Account holder</span></div><div>${spouseAvatarMarkup(member, "avatar-lg")}<span>${escapeHtml(member.profile.spouseName || "Spouse")}</span></div></div>`
+            : ""
+        }
         <div class="profile-facts">
           ${profileFact("Spouse", member.profile.spouseName || "Not provided")}
           ${profileFact("Employer", member.profile.employer || "Not provided")}
@@ -1734,7 +1790,10 @@ function communityFooter() {
   return `
     <footer class="community-footer">
       <div><strong>Connect with the ministry</strong><span>Stay connected with the God Cannot Lie Ministries church community.</span></div>
-      <a class="btn btn-secondary btn-small" href="https://www.facebook.com/share/1D3VquSEb6/?mibextid=wwXIfr" target="_blank" rel="noopener noreferrer">Visit Our Church Facebook Page ↗</a>
+      <div class="footer-links">
+        <button class="footer-privacy-link" type="button" data-view="settings">Privacy &amp; Security</button>
+        <a class="btn btn-secondary btn-small" href="https://www.facebook.com/share/1D3VquSEb6/?mibextid=wwXIfr" target="_blank" rel="noopener noreferrer">Visit Our Church Facebook Page ↗</a>
+      </div>
     </footer>
   `;
 }
@@ -1744,7 +1803,7 @@ function renderSettings() {
   activeView = "settings";
   const content = `
     <div class="content settings-page">
-      <div class="page-heading"><div><p class="eyebrow">Interface settings</p><h2>Make F.I.T. feel right for you</h2><p>Choose a theme and review privacy expectations for this prototype.</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">Interface settings</p><h2>Make F.I.T. feel right for you</h2><p>Choose the appearance that works best for you.</p></div></div>
       <section class="panel">
         <div class="panel-heading"><div><h3>Appearance</h3><p>Your theme choice is saved to this account.</p></div></div>
         <div class="panel-body theme-grid">
@@ -1752,20 +1811,11 @@ function renderSettings() {
           <button class="theme-choice ${account.preferences.theme === "dark" ? "active" : ""}" type="button" data-theme-choice="dark"><span class="theme-preview dark-preview"></span><strong>Dark mode</strong><small>Navy surfaces with gold borders</small></button>
         </div>
       </section>
-      <section class="panel security-panel">
-        <div class="panel-heading"><div><h3>Privacy and security</h3><p>Financial data deserves strong boundaries.</p></div><span class="badge green">F.I.T. standard</span></div>
-        <div class="panel-body security-grid">
-          <div><strong>Role-protected views</strong><span>Coaches can only view accepted mentees and forms shared with them.</span></div>
-          <div><strong>No banking credentials</strong><span>F.I.T. never asks for private bank usernames or passwords.</span></div>
-          <div><strong>Validated uploads</strong><span>Profile photos and paystubs are restricted by file type and size.</span></div>
-          <div><strong>Production requirement</strong><span>Launch storage must use encrypted server-side files, authentication, authorization rules, and audit logs.</span></div>
-        </div>
-      </section>
     </div>
   `;
   app.innerHTML = shell(content, {
     title: "Settings",
-    subtitle: "Appearance, privacy, and account preferences",
+    subtitle: "Appearance and account preferences",
   });
 }
 
@@ -1807,7 +1857,7 @@ function sessionReviewCard(session, viewer) {
       </div>
       <section class="ai-review">
         <div class="ai-review-heading"><span>✦</span><div><strong>F.I.T. AI session review</strong><small>Generated from the worksheet, bill decisions, coach notes, and action steps.</small></div></div>
-        <p>${escapeHtml(session.aiSummary)}</p>
+        <p>${escapeHtml(polishReviewText(session.aiSummary))}</p>
       </section>
       <div class="session-review-grid">
         ${sessionDetail("Coach feedback notes", session.coachNotes || "No additional coach notes submitted.")}
@@ -1826,6 +1876,19 @@ function sessionReviewCard(session, viewer) {
       </section>
     </article>
   `;
+}
+
+function polishReviewText(value = "") {
+  return String(value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean)
+    .map((sentence) => {
+      const cleaned = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+      return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
+    })
+    .join(" ");
 }
 
 function sessionDetail(label, value) {
@@ -1849,7 +1912,7 @@ function showSessionCompletionModal(formId) {
       <div class="modal-body">
         <p>Your original notes remain separate. The F.I.T. review will summarize these notes with the worksheet and bill decisions.</p>
         <form id="session-completion-form" class="form-stack">
-          <div class="field"><label for="coach-session-notes">Coach feedback notes</label><textarea id="coach-session-notes" class="input notes-area compact-notes" name="coachNotes" required placeholder="Feedback, patterns noticed, and encouragement"></textarea></div>
+          <div class="field"><label for="coach-session-notes">Add notes for your mentee</label><textarea id="coach-session-notes" class="input notes-area compact-notes" name="coachNotes" required placeholder="Feedback, patterns noticed, and encouragement"></textarea></div>
           <div class="field"><label for="session-action-steps">Action steps before the next session</label><textarea id="session-action-steps" class="input notes-area compact-notes" name="actionSteps" required placeholder="Specific next steps for the member"></textarea></div>
           <button class="btn btn-gold" type="submit">Approve and complete F.I.T. session</button>
         </form>
@@ -1870,7 +1933,7 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
     .filter((bill) => bill.name && bill.coachDecision !== "this_check")
     .map((bill) => `${bill.name} (${money(bill.amount)})`);
   const calc = calculate(form);
-  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. The session reviewed ${money(calc.thisCheck)} in paycheck income, ${money(calc.tithe)} in tithe, ${money(calc.totalBills)} in planned outflow, and ${money(calc.available)} remaining. ${paid.length ? `${paid.length} bill${paid.length === 1 ? " was" : "s were"} marked to pay this check.` : "No bills were marked paid this check."} ${left.length ? `${left.length} bill${left.length === 1 ? " remains" : "s remain"} for follow-up.` : "No bills remain for follow-up."} The next focus is to follow the coach's action steps while continuing savings and debt progress.`;
+  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. During the session, they reviewed ${money(calc.thisCheck)} in paycheck income, ${money(calc.tithe)} in tithe, ${money(calc.totalBills)} in planned outflow, and ${money(calc.available)} remaining after the plan. ${paid.length ? `${paid.length} bill${paid.length === 1 ? " was" : "s were"} marked for payment from this check.` : "No bills were marked for payment from this check."} ${left.length ? `${left.length} bill${left.length === 1 ? " remains" : "s remain"} to be addressed during a future check.` : "No bills remain for follow-up."} Before the next session, the mentee should complete the assigned action steps and continue making progress toward savings, investment, and debt goals.`;
   return {
     id: uid("session"),
     formId: form.id,
@@ -1927,6 +1990,7 @@ function renderDashboard() {
           ${metric("Combined debt", money(totalDebt))}
           ${metric("Mentee requests", pendingRequests.length)}
         </section>
+        ${coachQuickOverview(mentees, sharedForms, withdrawals)}
         <div class="page-heading">
           <div>
             <h2>Documents to review</h2>
@@ -1994,11 +2058,47 @@ function dashboardBanner(account, isCoach) {
   return `
     <section class="fit-dashboard-banner">
       <div>
-        <p class="eyebrow">${isCoach ? "F.I.T. coaching workspace" : "F.I.T. member workspace"}</p>
+        ${isCoach ? "" : `<p class="eyebrow">F.I.T. member workspace</p>`}
         <h2>${isCoach ? "Coach with clarity. Lead with accountability." : `Welcome back, ${escapeHtml(account.name.split(" ")[0])}.`}</h2>
         <p>${isCoach ? "Review plans, celebrate progress, and keep every next step visible." : "Every paycheck is another opportunity to build financial integrity and momentum."}</p>
       </div>
       <img src="assets/fit-logo-exact-transparent.png" alt="Financial Integrity Training">
+    </section>
+  `;
+}
+
+function coachQuickOverview(mentees, sharedForms, withdrawals) {
+  const activity = [
+    ...sharedForms.map((form) => ({
+      time: form.updatedAt,
+      person: form.ownerName,
+      label: form.status === "submitted" ? "sent a worksheet for review" : form.status === "approved" ? "has an approved worksheet update" : "updated a worksheet",
+      value: money(calculate(form).available),
+    })),
+    ...withdrawals.map((withdrawal) => ({
+      time: withdrawal.createdAt,
+      person: appState.accounts[withdrawal.memberEmail]?.name || withdrawal.memberEmail,
+      label: "submitted a savings withdrawal",
+      value: `-${money(withdrawal.amount)}`,
+    })),
+    ...mentees.flatMap((member) =>
+      member.savingsInvestmentAccounts.map((asset) => ({
+        time: asset.history.at(-1)?.recordedAt || `${asset.updatedAt}T12:00:00`,
+        person: member.name,
+        label: `updated ${asset.name || asset.type}`,
+        value: money(asset.balance),
+      })),
+    ),
+  ]
+    .filter((item) => item.time)
+    .sort((a, b) => new Date(b.time) - new Date(a.time))
+    .slice(0, 6);
+  return `
+    <section class="panel coach-quick-overview">
+      <div class="panel-heading"><div><h3>Quick overview</h3><p>Recent changes from your active mentees</p></div><span class="badge green">Live</span></div>
+      <div class="quick-activity-list">
+        ${activity.length ? activity.map((item) => `<article><div><strong>${escapeHtml(item.person)}</strong><span>${escapeHtml(item.label)} · ${updatedLabel(item.time)}</span></div><b>${escapeHtml(item.value)}</b></article>`).join("") : emptyInline("No recent changes", "Mentee updates will appear here as they happen.")}
+      </div>
     </section>
   `;
 }
@@ -2241,7 +2341,7 @@ function billGroup(form, key, label, readOnly, isCoachReview) {
           <tbody>
             ${rows.map((row, index) => `
               <tr>
-                <td><input class="table-input" list="${listId}" data-bill-suggestion="${key}.${index}" data-path="bills.${key}.${index}.name" value="${escapeHtml(row.name)}" placeholder="Choose or enter bill" ${readOnly ? "disabled" : ""}></td>
+                <td><div class="bill-selector-wrap"><input class="table-input" list="${listId}" data-bill-suggestion="${key}.${index}" data-path="bills.${key}.${index}.name" value="${escapeHtml(row.name)}" placeholder="Choose or enter bill" ${readOnly ? "disabled" : ""}>${readOnly ? "" : `<button class="bill-selector-button" type="button" data-open-bill-selector aria-label="Open saved bill selector" title="Open saved bill selector">⌄</button>`}</div></td>
                 <td><input class="table-input" type="date" data-current-calendar data-path="bills.${key}.${index}.dueDate" value="${row.dueDate}" ${readOnly ? "disabled" : ""}></td>
                 <td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step="0.01" data-path="bills.${key}.${index}.amount" value="${row.amount}" placeholder="0" ${readOnly ? "disabled" : ""}></div></td>
                 <td>${billDecisionControl(`bills.${key}.${index}.coachDecision`, row.coachDecision, isCoachReview)}</td>
@@ -3067,6 +3167,26 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (event.target.closest("[data-remove-spouse-photo]")) {
+    const account = currentAccount();
+    account.spousePhoto = null;
+    saveState();
+    renderProfile();
+    showToast("Default spouse avatar restored");
+    return;
+  }
+
+  const billSelectorButton = event.target.closest("[data-open-bill-selector]");
+  if (billSelectorButton) {
+    const input = billSelectorButton.closest(".bill-selector-wrap")?.querySelector("[data-bill-suggestion]");
+    if (input) {
+      input.focus();
+      if (typeof input.showPicker === "function") input.showPicker();
+      else input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    }
+    return;
+  }
+
   const themeChoice = event.target.closest("[data-theme-choice]");
   if (themeChoice) {
     const account = currentAccount();
@@ -3351,6 +3471,7 @@ document.addEventListener("submit", (event) => {
     account.profile.maritalStatus = data.get("maritalStatus");
     account.profile.spouseName =
       account.profile.maritalStatus === "married" ? data.get("spouseName").trim() : "";
+    if (account.profile.maritalStatus !== "married") account.spousePhoto = null;
     Object.values(appState.forms)
       .filter((form) => form.ownerEmail === account.email)
       .forEach((form) => {
@@ -3610,6 +3731,33 @@ document.addEventListener("change", (event) => {
       if (saveState()) {
         renderProfile();
         showToast("Profile photo updated");
+      }
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+
+  const spousePhotoInput = event.target.closest("[data-spouse-photo-upload]");
+  if (spousePhotoInput?.files?.[0]) {
+    const file = spousePhotoInput.files[0];
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowedTypes.includes(file.type) || file.size > 1024 * 1024) {
+      showToast("Upload a PNG, JPG, or WebP spouse photo no larger than 1 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const account = currentAccount();
+      account.spousePhoto = {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        uploadedAt: new Date().toISOString(),
+        dataUrl: reader.result,
+      };
+      if (saveState()) {
+        renderProfile();
+        showToast("Spouse photo updated");
       }
     };
     reader.readAsDataURL(file);
