@@ -636,6 +636,30 @@ function saveState() {
   }
 }
 
+async function saveFinancialProfileNow() {
+  const account = currentAccount();
+  const profileForm = document.getElementById("profile-form");
+  if (account && profileForm) {
+    const data = new FormData(profileForm);
+    account.name = data.get("name").trim();
+    account.profile.phone = data.get("phone").trim();
+    account.profile.employer = data.get("employer").trim();
+    account.profile.address = data.get("address").trim();
+    account.profile.payFrequency = data.get("payFrequency");
+    account.profile.maritalStatus = data.get("maritalStatus");
+    account.profile.spouseName =
+      account.profile.maritalStatus === "married" ? data.get("spouseName").trim() : "";
+    account.profileCompleted = profileIsComplete(account);
+  }
+  if (!saveState()) return;
+  try {
+    await productionBackend.saveNow?.(appState);
+    showToast("Financial profile data saved.");
+  } catch (error) {
+    showToast(error.message || "Financial profile could not be saved.");
+  }
+}
+
 function currentAccount() {
   return appState.accounts[appState.sessionEmail] || null;
 }
@@ -647,6 +671,39 @@ function money(value) {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(number);
+}
+
+function profileSavingsTotal(account) {
+  return (account.savingsInvestmentAccounts || [])
+    .filter((item) => item.type === "savings")
+    .reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
+}
+
+function profileInvestmentTotal(account) {
+  return (account.savingsInvestmentAccounts || [])
+    .filter((item) => item.type === "investment")
+    .reduce((sum, item) => sum + (Number(item.balance) || 0), 0);
+}
+
+function profileDebtTotal(account) {
+  return (account.financialInventory?.debts || []).reduce(
+    (sum, debt) => sum + (Number(debt.totalOwed) || 0),
+    0,
+  );
+}
+
+function refreshFinancialProfileSummary(account = currentAccount()) {
+  if (!account) return;
+  const values = {
+    "Current savings": money(profileSavingsTotal(account)),
+    "Tracked assets": money(profileInvestmentTotal(account)),
+    "Remaining debt": money(profileDebtTotal(account)),
+  };
+  document.querySelectorAll("[data-metric-label]").forEach((metricElement) => {
+    const value = values[metricElement.dataset.metricLabel];
+    const output = metricElement.querySelector("strong");
+    if (value && output) output.textContent = value;
+  });
 }
 
 function dateLabel(value) {
@@ -716,10 +773,30 @@ function memberForms(email) {
 }
 
 function getMemberCarryForward(account) {
-  if (Object.keys(account.carryForward || {}).length) return clone(account.carryForward);
+  if (Object.keys(account.carryForward || {}).length) {
+    const carried = clone(account.carryForward);
+    const savingsTotal = profileSavingsTotal(account);
+    if (account.savingsInvestmentAccounts?.some((item) => item.type === "savings")) {
+      carried.savings ||= {};
+      carried.savings.current = String(savingsTotal);
+    }
+    if (account.financialInventory?.debts?.length) carried.debts = clone(account.financialInventory.debts);
+    if (account.financialInventory?.creditCards?.length) {
+      carried.creditCards = clone(account.financialInventory.creditCards);
+    }
+    return carried;
+  }
   const latest = memberForms(account.email)[0];
-  if (!latest) return {};
+  if (!latest) {
+    const savingsTotal = profileSavingsTotal(account);
+    return account.savingsInvestmentAccounts?.some((item) => item.type === "savings")
+      ? { savings: { current: String(savingsTotal), goal: "" } }
+      : {};
+  }
   const latestCalc = calculate(latest);
+  const profileSavings = account.savingsInvestmentAccounts?.some((item) => item.type === "savings")
+    ? String(profileSavingsTotal(account))
+    : String(latestCalc.savingsAfter || "");
   return {
     bills: Object.fromEntries(
       billGroups.map(([key]) => [
@@ -752,7 +829,7 @@ function getMemberCarryForward(account) {
       })),
     savings: {
       goal: latest.data.savings.goal,
-      current: String(latestCalc.savingsAfter || ""),
+      current: profileSavings,
     },
     debts: latest.data.debts
       .filter((debt) => debt.account)
@@ -1087,19 +1164,12 @@ function renderProfile() {
     return;
   }
 
-  const carryForward = getMemberCarryForward(account);
-  const currentSavings = Number(carryForward.savings?.current) || 0;
-  const totalDebt = (carryForward.debts || []).reduce(
-    (sum, debt) => sum + (Number(debt.totalOwed) || 0),
-    0,
-  );
-  const assetTotal = account.savingsInvestmentAccounts.reduce(
-    (sum, assetAccount) => sum + (Number(assetAccount.balance) || 0),
-    0,
-  );
+  const currentSavings = profileSavingsTotal(account);
+  const totalDebt = profileDebtTotal(account);
+  const assetTotal = profileInvestmentTotal(account);
   const content = `
     <div class="content">
-      <div class="page-heading"><div><p class="eyebrow">Your financial foundation</p><h2>My F.I.T. financial profile</h2><p>Profile data becomes the starting point for every new worksheet.</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">Your financial foundation</p><h2>My F.I.T. financial profile</h2><p>Profile data becomes the starting point for every new worksheet.</p></div><button class="btn btn-primary" type="button" data-save-financial-profile>Save profile data</button></div>
       <section class="profile-layout">
         ${personalProfilePanel(account)}
         <aside class="profile-summary-stack">
@@ -1219,7 +1289,7 @@ function assetAccountsSection(account) {
       <div class="asset-summary-strip">
         ${profileFact("Savings accounts", `${savings.length} · ${money(savings.reduce((sum, item) => sum + (Number(item.balance) || 0), 0))}`)}
         ${profileFact("Investment accounts", `${investments.length} · ${money(investments.reduce((sum, item) => sum + (Number(item.balance) || 0), 0))}`)}
-        ${profileFact("Combined value", money(account.savingsInvestmentAccounts.reduce((sum, item) => sum + (Number(item.balance) || 0), 0)))}
+        ${profileFact("Savings + investments", money(account.savingsInvestmentAccounts.reduce((sum, item) => sum + (Number(item.balance) || 0), 0)))}
       </div>
       <div class="asset-chart-wrap">${assetHistoryChart(account.savingsInvestmentAccounts)}</div>
       <div class="profile-inventory-list">
@@ -1374,12 +1444,8 @@ function profileRelationship(account) {
 }
 
 function coachProfileCard(member) {
-  const carryForward = getMemberCarryForward(member);
-  const currentSavings = Number(carryForward.savings?.current) || 0;
-  const totalDebt = (carryForward.debts || []).reduce(
-    (sum, debt) => sum + (Number(debt.totalOwed) || 0),
-    0,
-  );
+  const currentSavings = profileSavingsTotal(member);
+  const totalDebt = profileDebtTotal(member);
   return `
     <article class="panel coach-profile">
       <div class="panel-heading"><div class="profile-heading-person">${avatarMarkup(member, "avatar-lg")}<div><h3>${escapeHtml(member.name)}</h3><p>${escapeHtml(member.email)}</p></div></div><span class="badge green">${escapeHtml(profileRelationship(member))}</span></div>
@@ -1425,7 +1491,7 @@ function showMenteeProfileModal(email) {
           ${profileFact("Pay frequency", member.profile.payFrequency || "Not provided")}
           ${profileFact("Recurring bills", String(member.financialInventory.recurringBills.length))}
           ${profileFact("Card accounts", String(member.financialInventory.creditCards.length))}
-          ${profileFact("Tracked assets", String(member.savingsInvestmentAccounts.length))}
+          ${profileFact("Tracked investment assets", money(profileInvestmentTotal(member)))}
         </div>
         ${assetHistoryChart(member.savingsInvestmentAccounts)}
         ${paystubVault(member, true)}
@@ -2093,7 +2159,7 @@ function coachQuickOverview(mentees, sharedForms, withdrawals) {
 
 function metric(label, value, className = "") {
   return `
-    <article class="metric ${className}">
+    <article class="metric ${className}" data-metric-label="${escapeHtml(label)}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(String(value))}</strong>
     </article>
@@ -3150,6 +3216,11 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (event.target.closest("[data-save-financial-profile]")) {
+    await saveFinancialProfileNow();
+    return;
+  }
+
   if (event.target.closest("[data-add-asset-account]")) {
     const account = currentAccount();
     account.savingsInvestmentAccounts.push(blankSavingsInvestmentAccount());
@@ -3684,6 +3755,7 @@ document.addEventListener("input", (event) => {
     account.savingsInvestmentAccounts[Number(index)][field] = assetInput.value;
     if (field === "balance") saveAssetHistoryEntry(account, index);
     saveState();
+    refreshFinancialProfileSummary(account);
     return;
   }
 
@@ -3693,6 +3765,7 @@ document.addEventListener("input", (event) => {
     const account = currentAccount();
     setAtPath(account, profileInput.dataset.profilePath, profileInput.value);
     saveState();
+    refreshFinancialProfileSummary(account);
     return;
   }
 

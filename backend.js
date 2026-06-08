@@ -281,6 +281,7 @@
     config,
     hydrate,
     queuePersist,
+    saveNow: persist,
     signUp,
     signIn,
     verifyOtp,
