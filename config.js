@@ -2,6 +2,6 @@ window.WEAREFIT_CONFIG = {
   production: false,
   supabaseUrl: "",
   supabasePublishableKey: "",
-  appUrl: "https://god-cannot-lie-ministries.github.io/WEAREFIT/",
+  appUrl: "https://fit-training.org/",
   emailDomain: "notifications.fit-training.org",
 };

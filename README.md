@@ -2,9 +2,7 @@
 
 WEAREFIT is the production F.I.T. Financial Integrity Training portal for members and coaches. It uses F.I.T. branding, member onboarding, coach/mentee workflows, financial profiles, worksheets, paystub archives, savings and investment tracking, session reviews, and secure production services through Supabase and Resend.
 
-Live app: `https://god-cannot-lie-ministries.github.io/WEAREFIT/`
-
-The custom domain `https://app.fit-training.org` can replace the GitHub Pages URL after its DNS record resolves.
+Live app: `https://fit-training.org/`
 
 ## What is included
 
@@ -42,13 +40,13 @@ Do not put the Supabase service-role key or Resend API key in frontend files. On
 5. In Authentication settings, set the site URL to:
 
 ```text
-https://app.fit-training.org
+https://fit-training.org
 ```
 
 6. Add redirect URLs:
 
 ```text
-https://app.fit-training.org
+https://fit-training.org
 https://god-cannot-lie-ministries.github.io/WEAREFIT/
 ```
 
@@ -90,7 +88,7 @@ Set the function secrets in Supabase:
 ```bash
 supabase secrets set RESEND_API_KEY=YOUR_RESEND_API_KEY
 supabase secrets set EMAIL_FROM="WEAREFIT <invites@notifications.fit-training.org>"
-supabase secrets set APP_URL=https://app.fit-training.org
+supabase secrets set APP_URL=https://fit-training.org
 ```
 
 Supabase provides `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` automatically to Edge Functions. Never place the service-role key in the website or GitHub repository. Supabase's function deployment and secrets docs are here:
@@ -113,15 +111,7 @@ The workflow uses those public values to connect the browser app to Supabase.
 
 ## Domain setup
 
-In your DNS provider, add:
-
-```text
-Type: CNAME
-Name: app
-Value: god-cannot-lie-ministries.github.io
-```
-
-Then in GitHub Pages, set the custom domain to `app.fit-training.org` and enable HTTPS after GitHub finishes checking DNS.
+GitHub Pages and DNS are configured to serve the app from `https://fit-training.org/`.
 
 ## Local preview
 

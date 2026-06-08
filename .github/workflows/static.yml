@@ -38,7 +38,7 @@ jobs:
             production: true,
             supabaseUrl: "${{ vars.SUPABASE_URL }}",
             supabasePublishableKey: "${{ vars.SUPABASE_PUBLISHABLE_KEY }}",
-            appUrl: "https://god-cannot-lie-ministries.github.io/WEAREFIT/",
+            appUrl: "https://fit-training.org/",
             emailDomain: "notifications.fit-training.org",
           };
           EOF
