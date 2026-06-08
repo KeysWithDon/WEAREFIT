@@ -888,7 +888,6 @@ function render() {
 
 function renderLogin() {
   if (loginMode === "verify" && pendingVerificationEmail) {
-    const account = appState.accounts[pendingVerificationEmail];
     app.innerHTML = `
       <main class="login-shell">
         <section class="login-brand">
@@ -900,23 +899,17 @@ function renderLogin() {
             <h1>Confirm your email to continue.</h1>
             <p>Email verification protects member financial information and coach access.</p>
           </div>
-          <div class="login-footer-meta"><span class="login-caption">${productionBackend.enabled ? "Secure email verification" : "Local preview · Verification email is simulated"}</span><span>Privacy &amp; Security</span></div>
+          <div class="login-footer-meta"><span class="login-caption">${productionBackend.enabled ? "Secure email confirmation" : "Local preview account ready"}</span><span>Privacy &amp; Security</span></div>
         </section>
         <section class="login-panel">
           <div class="login-box">
-            <p class="eyebrow">Verify email</p>
-            <h2>Enter your verification code</h2>
-            <p>A verification code was sent to <strong>${escapeHtml(pendingVerificationEmail)}</strong>.</p>
-            ${productionBackend.enabled ? "" : `<div class="verification-code-preview"><span>Preview verification code</span><strong>${escapeHtml(account?.verificationCode || "")}</strong></div>`}
-            <form id="verification-form" class="form-stack">
-              <div class="field">
-                <label for="verification-code">Verification code</label>
-                <input id="verification-code" name="code" inputmode="numeric" autocomplete="one-time-code" required />
-              </div>
-              <button class="btn btn-primary" type="submit">Verify email</button>
-              <button class="btn btn-secondary" type="button" data-resend-verification>Send a new code</button>
-              <button class="btn btn-secondary" type="button" data-login-mode="signin">Back to sign in</button>
-            </form>
+            <p class="eyebrow">Confirm your email</p>
+            <h2>Check your inbox</h2>
+            <p>Click the confirmation link sent to <strong>${escapeHtml(pendingVerificationEmail)}</strong>, then proceed to login.</p>
+            <div class="form-stack">
+              <button class="btn btn-primary" type="button" data-login-mode="signin">Proceed to login</button>
+              ${productionBackend.enabled ? `<button class="btn btn-secondary" type="button" data-resend-verification>Resend confirmation email</button>` : ""}
+            </div>
           </div>
         </section>
       </main>
@@ -966,7 +959,7 @@ function renderLogin() {
             </div>
             <button class="btn btn-primary" type="submit">${isSignup ? "Create account" : `Sign in as ${loginRole === "coach" ? "coach" : "member"}`} <span aria-hidden="true">→</span></button>
             <button class="btn btn-secondary" type="button" data-login-mode="${isSignup ? "signin" : "signup"}">${isSignup ? "Already have an account? Sign in" : "New user? Create an account"}</button>
-            ${isSignup ? "" : `<button class="btn btn-secondary" type="button" data-open-verification>Send email verification</button>`}
+            ${isSignup ? "" : `<button class="btn btn-secondary" type="button" data-open-verification>Resend confirmation email</button>`}
           </form>
           ${productionBackend.enabled ? "" : `<div class="login-demo">or open a preview</div><div class="demo-buttons"><button class="btn btn-secondary" type="button" data-demo="alex@fitdemo.com">Member preview · demo123</button><button class="btn btn-secondary" type="button" data-demo="coach@fitdemo.com">Coach preview · demo123</button></div>`}
         </div>
@@ -2938,7 +2931,7 @@ async function beginVerification(email) {
       pendingVerificationEmail = normalizedEmail;
       loginMode = "verify";
       renderLogin();
-      showToast("A new verification code was sent to your email.");
+      showToast("Confirmation link sent. Check your email.");
     } catch (error) {
       showToast(error.message || "Verification email could not be sent.");
     }
@@ -2949,11 +2942,12 @@ async function beginVerification(email) {
     showToast("Create an account before requesting verification.");
     return;
   }
-  account.verificationCode = verificationCode();
-  pendingVerificationEmail = normalizedEmail;
-  loginMode = "verify";
+  account.verified = true;
+  account.verificationCode = null;
+  loginMode = "signin";
   saveState();
   renderLogin();
+  showToast("Preview account is ready. Proceed to login.");
 }
 
 async function signIn(email, password, role) {
@@ -3005,7 +2999,7 @@ async function createAccount(name, email, password, role) {
       pendingVerificationEmail = normalizedEmail;
       loginMode = "verify";
       renderLogin();
-      showToast("Verification code sent to your email.");
+      showToast("Click the confirmation link in your email, then sign in.");
     } catch (error) {
       showToast(error.message || "Account could not be created.");
     }
@@ -3020,8 +3014,8 @@ async function createAccount(name, email, password, role) {
     email: normalizedEmail,
     password,
     role,
-    verified: false,
-    verificationCode: verificationCode(),
+    verified: true,
+    verificationCode: null,
     coachEmail: null,
     coachRequestStatus: null,
     profileCompleted: false,
