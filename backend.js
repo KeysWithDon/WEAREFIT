@@ -17,6 +17,16 @@
     return String(value || "").trim().toLowerCase();
   }
 
+  async function throwFunctionError(error, fallback) {
+    if (!error) return;
+    let message = "";
+    try {
+      const payload = await error.context?.json();
+      message = payload?.error || "";
+    } catch {}
+    throw new Error(message || error.message || fallback);
+  }
+
   function cleanAccount(account) {
     const cleaned = structuredClone(account);
     delete cleaned.password;
@@ -134,6 +144,20 @@
       return createdState;
     }
     const merged = mergeStates(rows, email);
+    const { data: presenceRows, error: presenceError } = await client
+      .from("account_presence")
+      .select("email, last_active_at");
+    if (presenceError && !/account_presence/i.test(presenceError.message || "")) throw presenceError;
+    (presenceRows || []).forEach((presence) => {
+      const presenceEmail = normalizeEmail(presence.email);
+      merged.accounts[presenceEmail] ||= {
+        name: presenceEmail,
+        email: presenceEmail,
+        role: "coach",
+        profilePhoto: null,
+      };
+      merged.accounts[presenceEmail].lastActiveAt = presence.last_active_at;
+    });
     await refreshFileUrls(merged);
     return merged;
   }
@@ -159,6 +183,7 @@
     const currentEmail = normalizeEmail(currentSession.user.email);
     const current = state.accounts[currentEmail];
     if (!current) return;
+    await updatePresence(current.lastActiveAt || null);
     const allowedOwners = Object.values(state.accounts).filter(
       (account) =>
         account.email === currentEmail ||
@@ -182,6 +207,22 @@
       });
       if (error) throw error;
     }
+  }
+
+  async function updatePresence(lastActiveAt) {
+    const currentSession = await session();
+    if (!currentSession) return;
+    const currentEmail = normalizeEmail(currentSession.user.email);
+    const { error: presenceError } = await client.from("account_presence").upsert(
+      {
+        user_id: currentSession.user.id,
+        email: currentEmail,
+        last_active_at: lastActiveAt || null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
+    if (presenceError && !/account_presence/i.test(presenceError.message || "")) throw presenceError;
   }
 
   function queuePersist(state) {
@@ -266,6 +307,20 @@
     return data;
   }
 
+  async function requestAccountDeletion() {
+    const { data, error } = await client.functions.invoke("request-account-deletion");
+    await throwFunctionError(error, "Deletion verification email could not be sent.");
+    return data;
+  }
+
+  async function completeAccountDeletion(email, token) {
+    const { data, error } = await client.functions.invoke("complete-account-deletion", {
+      body: { email: normalizeEmail(email), token },
+    });
+    await throwFunctionError(error, "This deletion verification link is invalid or expired.");
+    return data;
+  }
+
   async function uploadPrivateFile(bucket, file, category) {
     const currentSession = await session();
     if (!currentSession) throw new Error("Sign in before uploading a file.");
@@ -319,6 +374,7 @@
     hydrate,
     queuePersist,
     saveNow: persist,
+    updatePresence,
     signUp,
     signIn,
     verifyOtp,
@@ -328,6 +384,8 @@
     signOut,
     sendCoachInvite,
     connectCoach,
+    requestAccountDeletion,
+    completeAccountDeletion,
     uploadPrivateFile,
   };
 })();
