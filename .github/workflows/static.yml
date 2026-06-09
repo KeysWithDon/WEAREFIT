@@ -40,6 +40,8 @@ jobs:
             supabasePublishableKey: "${{ vars.SUPABASE_PUBLISHABLE_KEY }}",
             appUrl: "https://fit-training.org/",
             emailDomain: "notifications.fit-training.org",
+            accountDeletionEnabled: "${{ vars.ACCOUNT_DELETION_ENABLED }}" === "true",
+            presenceEnabled: "${{ vars.PRESENCE_ENABLED }}" === "true",
           };
           EOF
       - name: Setup Pages
