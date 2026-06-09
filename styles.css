@@ -736,7 +736,15 @@ textarea:disabled {
 
 .profile-summary-stack .profile-photo-panel,
 .profile-summary-stack .spouse-photo-panel {
-  grid-column: span 3;
+  width: min(100%, 260px);
+}
+
+.profile-photo-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
 }
 
 .profile-vault {
@@ -2331,7 +2339,9 @@ html[data-theme="dark"] .sidebar-brand img {
   border: 1px solid var(--gold-line);
   border-radius: 8px;
   background: var(--surface-raised);
-  padding: 20px;
+  width: min(100%, 280px);
+  margin-inline: auto;
+  padding: 16px;
   text-align: center;
   box-shadow: var(--premium-shadow);
 }
@@ -2381,9 +2391,9 @@ html[data-theme="dark"] .sidebar-brand img {
 }
 
 .avatar-xl {
-  width: 96px;
-  height: 96px;
-  flex-basis: 96px;
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
   border: 3px solid var(--gold);
   font-size: 24px;
   box-shadow: 0 10px 24px rgba(7, 26, 58, 0.18);
@@ -2403,7 +2413,58 @@ html[data-theme="dark"] .sidebar-brand img {
 }
 
 .profile-summary-stack .profile-photo-panel {
-  min-height: 210px;
+  min-height: 0;
+}
+
+.activity-status {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px !important;
+  font-size: 10px !important;
+  font-weight: 800;
+}
+
+.activity-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #8993a5;
+}
+
+.activity-status.online {
+  color: #19734a !important;
+}
+
+.activity-status.online i {
+  background: #22a96b;
+}
+
+.activity-status.recent {
+  color: #987019 !important;
+}
+
+.activity-status.recent i {
+  background: var(--gold);
+}
+
+.danger-zone {
+  margin-top: 22px;
+  border-color: rgba(172, 54, 54, 0.35);
+}
+
+.danger-zone-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.danger-zone-body p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .asset-section,
@@ -3000,7 +3061,7 @@ html[data-theme="dark"] .sidebar-brand img {
 }
 
 .spouse-photo-panel {
-  min-height: 210px;
+  min-height: 0;
 }
 
 .household-photo-row {
@@ -3138,6 +3199,20 @@ html[data-theme="dark"] .onboarding-banner strong {
 }
 
 @media (max-width: 620px) {
+  .profile-photo-row,
+  .danger-zone-body {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .profile-photo-row .profile-photo-panel {
+    width: min(100%, 250px);
+  }
+
+  .danger-zone-body .btn {
+    width: 100%;
+  }
+
   .fit-dashboard-banner,
   .theme-grid,
   .session-review-grid,
