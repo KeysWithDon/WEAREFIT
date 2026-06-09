@@ -5,6 +5,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const normalizeEmail = (value: unknown) => String(value || "").trim().toLowerCase();
+const validEmail = (value: string) =>
+  value.length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value);
+const escapeHtml = (value: string) =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -28,12 +34,17 @@ Deno.serve(async (request) => {
     const coachName = typeof metadata.name === "string" && metadata.name.trim()
       ? metadata.name.trim()
       : "Your coach";
-    const coachEmail = authData.user.email?.toLowerCase();
+    const coachEmail = normalizeEmail(authData.user.email);
 
     const { memberEmail } = await request.json();
-    if (!memberEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberEmail)) {
+    const normalizedMemberEmail = normalizeEmail(memberEmail);
+    if (!validEmail(normalizedMemberEmail)) {
       throw new Error("Enter a valid member email.");
     }
+    const inviteUrl = new URL(appUrl);
+    inviteUrl.searchParams.set("coachInvite", coachEmail);
+    const safeCoachName = escapeHtml(coachName);
+    const safeInviteUrl = escapeHtml(inviteUrl.toString());
 
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -43,15 +54,19 @@ Deno.serve(async (request) => {
       },
       body: JSON.stringify({
         from: emailFrom,
-        to: [memberEmail],
+        to: [normalizedMemberEmail],
         subject: `${coachName} invited you to WEAREFIT`,
+        text: `${coachName} invited you to connect as a mentee in WEAREFIT. Accept the invitation: ${inviteUrl.toString()}`,
         html: `
-          <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#152033">
-            <h1 style="color:#0d2859">You are invited to WEAREFIT</h1>
-            <p>${coachName} invited you to connect as a mentee.</p>
-            <p><a href="${appUrl}?coachInvite=${encodeURIComponent(coachEmail || "")}" style="display:inline-block;background:#0d2859;color:white;padding:12px 18px;text-decoration:none;border-radius:6px">Accept coach invitation</a></p>
-            <p style="font-size:12px;color:#647084">Only accept coaching invitations from people you recognize.</p>
-          </div>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-family:Arial,sans-serif;color:#152033">
+            <tr><td align="center"><table role="presentation" width="560" cellspacing="0" cellpadding="24" style="max-width:560px;width:100%">
+              <tr><td><h1 style="color:#0d2859;margin:0 0 16px">You are invited to WEAREFIT</h1>
+              <p>${safeCoachName} invited you to connect as a mentee.</p>
+              <p><a href="${safeInviteUrl}" style="display:inline-block;background:#0d2859;color:#ffffff;padding:12px 18px;text-decoration:none;border-radius:6px">Accept coach invitation</a></p>
+              <p style="font-size:12px;color:#647084">If the button does not open, use this secure link:<br><a href="${safeInviteUrl}">${safeInviteUrl}</a></p>
+              <p style="font-size:12px;color:#647084">Only accept coaching invitations from people you recognize.</p></td></tr>
+            </table></td></tr>
+          </table>
         `,
       }),
     });

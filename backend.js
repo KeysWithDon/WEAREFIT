@@ -13,6 +13,10 @@
   let accessibleStateRows = new Map();
   let saveTimer = null;
 
+  function normalizeEmail(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
   function cleanAccount(account) {
     const cleaned = structuredClone(account);
     delete cleaned.password;
@@ -75,7 +79,7 @@
   async function hydrate() {
     const currentSession = await session();
     if (!currentSession) return null;
-    const email = currentSession.user.email.toLowerCase();
+    const email = normalizeEmail(currentSession.user.email);
     const { data: rows, error } = await client
       .from("portal_states")
       .select("owner_id, owner_email, role, coach_email, state");
@@ -152,7 +156,7 @@
   async function persist(state) {
     const currentSession = await session();
     if (!currentSession) return;
-    const currentEmail = currentSession.user.email.toLowerCase();
+    const currentEmail = normalizeEmail(currentSession.user.email);
     const current = state.accounts[currentEmail];
     if (!current) return;
     const allowedOwners = Object.values(state.accounts).filter(
@@ -187,8 +191,9 @@
   }
 
   async function signUp({ name, email, password, role }) {
+    const normalizedEmail = normalizeEmail(email);
     const { data, error } = await client.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
       options: {
         data: { name, role },
@@ -196,11 +201,17 @@
       },
     });
     if (error) throw error;
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      throw new Error("An account already exists for this email. Sign in or reset your password.");
+    }
     return data;
   }
 
   async function signIn({ email, password }) {
-    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    const { data, error } = await client.auth.signInWithPassword({
+      email: normalizeEmail(email),
+      password,
+    });
     if (error) throw error;
     return data;
   }
@@ -212,7 +223,25 @@
   }
 
   async function resendVerification(email) {
-    const { error } = await client.auth.resend({ type: "signup", email });
+    const { error } = await client.auth.resend({
+      type: "signup",
+      email: normalizeEmail(email),
+      options: { emailRedirectTo: config.appUrl },
+    });
+    if (error) throw error;
+  }
+
+  async function requestPasswordReset(email) {
+    const redirectUrl = new URL(config.appUrl);
+    redirectUrl.searchParams.set("passwordReset", "1");
+    const { error } = await client.auth.resetPasswordForEmail(normalizeEmail(email), {
+      redirectTo: redirectUrl.toString(),
+    });
+    if (error) throw error;
+  }
+
+  async function updatePassword(password) {
+    const { error } = await client.auth.updateUser({ password });
     if (error) throw error;
   }
 
@@ -223,7 +252,7 @@
 
   async function sendCoachInvite(memberEmail) {
     const { data, error } = await client.functions.invoke("send-coach-invite", {
-      body: { memberEmail, appUrl: config.appUrl },
+      body: { memberEmail: normalizeEmail(memberEmail), appUrl: config.appUrl },
     });
     if (error) throw error;
     return data;
@@ -294,6 +323,8 @@
     signIn,
     verifyOtp,
     resendVerification,
+    requestPasswordReset,
+    updatePassword,
     signOut,
     sendCoachInvite,
     connectCoach,

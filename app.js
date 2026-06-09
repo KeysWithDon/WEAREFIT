@@ -17,13 +17,52 @@ let loginMode = "signin";
 let pendingVerificationEmail = null;
 let toastTimer = null;
 let pendingPaystubUpload = null;
-const inviteCoachFromUrl = new URLSearchParams(window.location.search).get("coachInvite");
-if (inviteCoachFromUrl) localStorage.setItem("fit-pending-coach-invite", inviteCoachFromUrl.toLowerCase());
+const urlParameters = new URLSearchParams(window.location.search);
+const inviteCoachFromUrl = urlParameters.get("coachInvite");
+const passwordResetFromUrl = urlParameters.get("passwordReset") === "1";
+if (inviteCoachFromUrl) localStorage.setItem("fit-pending-coach-invite", normalizeEmail(inviteCoachFromUrl));
+if (passwordResetFromUrl) loginMode = "reset";
 
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
 
 applyTheme();
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function validEmail(value) {
+  const email = normalizeEmail(value);
+  const [localPart = "", domain = ""] = email.split("@");
+  return (
+    email.length <= 254 &&
+    localPart.length > 0 &&
+    localPart.length <= 64 &&
+    domain.includes(".") &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  );
+}
+
+function authErrorMessage(error, action = "continue") {
+  const message = String(error?.message || "");
+  if (/rate limit|too many requests/i.test(message)) {
+    return "Too many email attempts were made. Wait a few minutes, then try again.";
+  }
+  if (/already registered|already exists|user already/i.test(message)) {
+    return "An account already exists for this email. Sign in or reset your password.";
+  }
+  if (/invalid.*email|email.*invalid/i.test(message)) {
+    return "Enter a valid email address. Gmail, Yahoo, Outlook, iCloud, AOL, Proton, and business email addresses are supported.";
+  }
+  if (/email.*not confirmed/i.test(message)) {
+    return "Confirm your email before signing in. Check your inbox and spam folder, or resend the confirmation email.";
+  }
+  if (/sending|smtp|provider|email.*failed/i.test(message)) {
+    return "The email provider could not deliver this message yet. Check the address, then try again in a few minutes.";
+  }
+  return message || `Unable to ${action}. Please try again.`;
+}
 
 function uid(prefix = "id") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -937,6 +976,10 @@ function calculate(form) {
 function render() {
   const account = currentAccount();
   applyTheme();
+  if (loginMode === "reset") {
+    renderLogin();
+    return;
+  }
   if (!account) {
     renderLogin();
     return;
@@ -982,6 +1025,55 @@ function render() {
 }
 
 function renderLogin() {
+  if (loginMode === "forgot") {
+    app.innerHTML = `
+      <main class="login-shell">
+        <section class="login-brand">
+          <div class="brand-lockup"><img src="assets/fit-logo-exact-transparent.png" alt="FIT Financial Integrity Training" /></div>
+          <div class="brand-statement"><div class="brand-rule"></div><h1>Return to your financial plan.</h1><p>We will send a secure password reset link to your email address.</p></div>
+          <div class="login-footer-meta"><span class="login-caption">Secure account recovery</span><span>Privacy &amp; Security</span></div>
+        </section>
+        <section class="login-panel">
+          <div class="login-box">
+            <p class="eyebrow">Account recovery</p>
+            <h2>Reset your password</h2>
+            <p>Enter the email used for your member or coach account.</p>
+            <form id="password-reset-request-form" class="form-stack">
+              <div class="field"><label for="reset-email">Email address</label><input id="reset-email" name="email" type="email" autocomplete="email" required /></div>
+              <button class="btn btn-primary" type="submit">Send password reset link</button>
+              <button class="btn btn-secondary" type="button" data-login-mode="signin">Return to sign in</button>
+            </form>
+          </div>
+        </section>
+      </main>
+    `;
+    return;
+  }
+
+  if (loginMode === "reset") {
+    app.innerHTML = `
+      <main class="login-shell">
+        <section class="login-brand">
+          <div class="brand-lockup"><img src="assets/fit-logo-exact-transparent.png" alt="FIT Financial Integrity Training" /></div>
+          <div class="brand-statement"><div class="brand-rule"></div><h1>Create a secure new password.</h1><p>Your updated password will protect your F.I.T. financial workspace.</p></div>
+          <div class="login-footer-meta"><span class="login-caption">Secure account recovery</span><span>Privacy &amp; Security</span></div>
+        </section>
+        <section class="login-panel">
+          <div class="login-box">
+            <p class="eyebrow">Account recovery</p>
+            <h2>Choose a new password</h2>
+            <form id="password-update-form" class="form-stack">
+              <div class="field"><label for="new-password">New password</label><input id="new-password" name="password" type="password" minlength="8" autocomplete="new-password" required /></div>
+              <div class="field"><label for="confirm-password">Confirm new password</label><input id="confirm-password" name="confirmation" type="password" minlength="8" autocomplete="new-password" required /></div>
+              <button class="btn btn-primary" type="submit">Update password</button>
+            </form>
+          </div>
+        </section>
+      </main>
+    `;
+    return;
+  }
+
   if (loginMode === "verify" && pendingVerificationEmail) {
     app.innerHTML = `
       <main class="login-shell">
@@ -1000,7 +1092,7 @@ function renderLogin() {
           <div class="login-box">
             <p class="eyebrow">Confirm your email</p>
             <h2>Check your inbox</h2>
-            <p>Click the confirmation link sent to <strong>${escapeHtml(pendingVerificationEmail)}</strong>, then proceed to login.</p>
+            <p>Click the confirmation link sent to <strong>${escapeHtml(pendingVerificationEmail)}</strong>, then proceed to login. Delivery can take a few minutes; check spam or junk folders too.</p>
             <div class="form-stack">
               <button class="btn btn-primary" type="button" data-login-mode="signin">Proceed to login</button>
               ${productionBackend.enabled ? `<button class="btn btn-secondary" type="button" data-resend-verification>Resend confirmation email</button>` : ""}
@@ -1050,11 +1142,11 @@ function renderLogin() {
             </div>
             <div class="field">
               <label for="login-password">Password</label>
-              <input id="login-password" name="password" type="password" minlength="6" autocomplete="${isSignup ? "new-password" : "current-password"}" required />
+              <input id="login-password" name="password" type="password" minlength="${isSignup ? "8" : "6"}" autocomplete="${isSignup ? "new-password" : "current-password"}" required />
             </div>
             <button class="btn btn-primary" type="submit">${isSignup ? "Create account" : `Sign in as ${loginRole === "coach" ? "coach" : "member"}`} <span aria-hidden="true">→</span></button>
             <button class="btn btn-secondary" type="button" data-login-mode="${isSignup ? "signin" : "signup"}">${isSignup ? "Already have an account? Sign in" : "New user? Create an account"}</button>
-            ${isSignup ? "" : `<button class="btn btn-secondary" type="button" data-open-verification>Resend confirmation email</button>`}
+            ${isSignup || !productionBackend.enabled ? "" : `<button class="btn btn-secondary" type="button" data-login-mode="forgot">Forgot password?</button><button class="btn btn-secondary" type="button" data-open-verification>Resend confirmation email</button>`}
           </form>
           ${productionBackend.enabled ? "" : `<div class="login-demo">or open a preview</div><div class="demo-buttons"><button class="btn btn-secondary" type="button" data-demo="alex@fitdemo.com">Member preview · demo123</button><button class="btn btn-secondary" type="button" data-demo="coach@fitdemo.com">Coach preview · demo123</button></div>`}
         </div>
@@ -3078,10 +3170,10 @@ function verificationCode() {
 }
 
 async function beginVerification(email) {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   if (productionBackend.enabled) {
-    if (!normalizedEmail) {
-      showToast("Enter your email address first.");
+    if (!validEmail(normalizedEmail)) {
+      showToast("Enter a valid email address first.");
       return;
     }
     try {
@@ -3091,7 +3183,7 @@ async function beginVerification(email) {
       renderLogin();
       showToast("Confirmation link sent. Check your email.");
     } catch (error) {
-      showToast(error.message || "Verification email could not be sent.");
+      showToast(authErrorMessage(error, "send the confirmation email"));
     }
     return;
   }
@@ -3109,7 +3201,11 @@ async function beginVerification(email) {
 }
 
 async function signIn(email, password, role) {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
+  if (!validEmail(normalizedEmail)) {
+    showToast("Enter a valid email address.");
+    return;
+  }
   if (productionBackend.enabled) {
     try {
       const { user } = await productionBackend.signIn({ email: normalizedEmail, password });
@@ -3125,7 +3221,7 @@ async function signIn(email, password, role) {
       activeFormId = null;
       render();
     } catch (error) {
-      showToast(error.message || "Email, password, or account type is incorrect.");
+      showToast(authErrorMessage(error, "sign in"));
     }
     return;
   }
@@ -3151,7 +3247,15 @@ async function signIn(email, password, role) {
 }
 
 async function createAccount(name, email, password, role) {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
+  if (!validEmail(normalizedEmail)) {
+    showToast("Enter a valid email address. Yahoo and other major email providers are supported.");
+    return;
+  }
+  if (String(password || "").length < 8) {
+    showToast("Create a password with at least 8 characters.");
+    return;
+  }
   if (productionBackend.enabled) {
     try {
       await productionBackend.signUp({ name: name.trim(), email: normalizedEmail, password, role });
@@ -3160,7 +3264,7 @@ async function createAccount(name, email, password, role) {
       renderLogin();
       showToast("Click the confirmation link in your email, then sign in.");
     } catch (error) {
-      showToast(error.message || "Account could not be created.");
+      showToast(authErrorMessage(error, "create the account"));
     }
     return;
   }
@@ -3608,6 +3712,45 @@ document.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.id === "password-reset-request-form") {
+    event.preventDefault();
+    const email = normalizeEmail(new FormData(event.target).get("email"));
+    if (!validEmail(email)) {
+      showToast("Enter a valid email address.");
+      return;
+    }
+    try {
+      await productionBackend.requestPasswordReset(email);
+      loginMode = "signin";
+      renderLogin();
+      showToast("Password reset link sent. Check your inbox and spam folder.");
+    } catch (error) {
+      showToast(authErrorMessage(error, "send the password reset link"));
+    }
+    return;
+  }
+
+  if (event.target.id === "password-update-form") {
+    event.preventDefault();
+    const data = new FormData(event.target);
+    const password = String(data.get("password") || "");
+    if (password.length < 8 || password !== data.get("confirmation")) {
+      showToast(password.length < 8 ? "Use at least 8 characters." : "The passwords do not match.");
+      return;
+    }
+    try {
+      await productionBackend.updatePassword(password);
+      await productionBackend.signOut();
+      history.replaceState({}, "", window.location.pathname);
+      loginMode = "signin";
+      renderLogin();
+      showToast("Password updated. Sign in with your new password.");
+    } catch (error) {
+      showToast(authErrorMessage(error, "update the password"));
+    }
+    return;
+  }
+
   if (event.target.id === "verification-form") {
     event.preventDefault();
     if (productionBackend.enabled) {
@@ -3647,7 +3790,11 @@ document.addEventListener("submit", async (event) => {
     event.preventDefault();
     const coach = currentAccount();
     if (coach.role !== "coach") return;
-    const memberEmail = new FormData(event.target).get("email").trim().toLowerCase();
+    const memberEmail = normalizeEmail(new FormData(event.target).get("email"));
+    if (!validEmail(memberEmail)) {
+      showToast("Enter a valid mentee email address.");
+      return;
+    }
     const duplicate = appState.coachInvites.some(
       (invite) =>
         invite.coachEmail === coach.email &&
@@ -3685,7 +3832,11 @@ document.addEventListener("submit", async (event) => {
   if (event.target.id === "coach-request-form") {
     event.preventDefault();
     const member = currentAccount();
-    const coachEmail = new FormData(event.target).get("email").trim().toLowerCase();
+    const coachEmail = normalizeEmail(new FormData(event.target).get("email"));
+    if (!validEmail(coachEmail)) {
+      showToast("Enter a valid coach email address.");
+      return;
+    }
     let coach = appState.accounts[coachEmail];
     if (productionBackend.enabled) {
       try {
@@ -3833,7 +3984,7 @@ document.addEventListener("submit", async (event) => {
     event.preventDefault();
     const modal = event.target.closest(".modal-backdrop");
     const form = appState.forms[modal.dataset.formId];
-    const email = new FormData(event.target).get("email").trim().toLowerCase();
+    const email = normalizeEmail(new FormData(event.target).get("email"));
     const account = currentAccount();
     if (email !== account.coachEmail || account.coachRequestStatus !== "approved") {
       showToast("Connect with an approved coach before sharing this worksheet.");
