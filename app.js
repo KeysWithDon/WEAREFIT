@@ -4009,7 +4009,16 @@ document.addEventListener("submit", async (event) => {
       await productionBackend.completeAccountDeletion(deleteVerificationEmail, deleteVerificationToken);
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem("fit-pending-coach-invite");
-      appState = defaultState();
+      appState = {
+        accounts: {},
+        forms: {},
+        coachRequests: [],
+        coachInvites: [],
+        withdrawals: [],
+        sessions: [],
+        dateAutofillDisabled: true,
+        sessionEmail: null,
+      };
       history.replaceState({}, "", window.location.pathname);
       loginMode = "delete-success";
       renderLogin();
