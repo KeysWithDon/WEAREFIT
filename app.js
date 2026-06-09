@@ -323,27 +323,22 @@ function syncWorksheetBillsWithProfile(existingBills = [], profileBills = []) {
 }
 
 function syncWorksheetAccountsWithProfile(existingRows = [], profileRows = [], blankFactory, minimumRows) {
-  const profileByAccount = new Map(
-    profileRows
+  const existingByAccount = new Map(
+    existingRows
       .filter((row) => row.account)
-      .map((row) => [String(row.account).trim().toLowerCase(), clone(row)]),
+      .map((row) => [String(row.account).trim().toLowerCase(), row]),
   );
-  const synced = existingRows
+  const synced = profileRows
     .filter((row) => row.account)
-    .map((row) => {
-      const key = String(row.account).trim().toLowerCase();
-      const profileRow = profileByAccount.get(key);
-      if (!profileRow) return clone(row);
-      profileByAccount.delete(key);
+    .map((profileRow) => {
+      const existingRow = existingByAccount.get(String(profileRow.account).trim().toLowerCase());
       return {
         ...blankFactory(),
-        ...clone(row),
-        ...profileRow,
-        contribution: row.contribution || "",
-        coachDecision: row.coachDecision || "",
+        ...clone(profileRow),
+        contribution: existingRow?.contribution || "",
+        coachDecision: existingRow?.coachDecision || "",
       };
     });
-  profileByAccount.forEach((row) => synced.push({ ...blankFactory(), ...row }));
   while (synced.length < minimumRows) synced.push(blankFactory());
   return synced;
 }
@@ -384,6 +379,11 @@ function syncDraftFormsWithFinancialProfile(account) {
       form.generatedFromProfile = true;
       form.updatedAt = new Date().toISOString();
     });
+}
+
+function saveFinancialProfileMutation(account) {
+  syncDraftFormsWithFinancialProfile(account);
+  saveState();
 }
 
 function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerson = "account_holder") {
@@ -2374,7 +2374,7 @@ function renderDashboard() {
       <section class="metric-grid" aria-label="Financial overview">
         ${metric("Saved forms", forms.length)}
         ${metric("Latest paycheck", latestCalc ? money(latestCalc.thisCheck) : "$0")}
-        ${metric("Latest total debt", latestCalc ? money(latestCalc.totalDebt) : "$0")}
+        ${metric("Latest total debt", money(profileDebtTotal(account)))}
         ${metric("Completed sessions", completedSessions.length)}
       </section>
       <div class="page-heading">
@@ -3620,7 +3620,7 @@ document.addEventListener("click", async (event) => {
   if (removeAssetAccount) {
     const account = currentAccount();
     account.savingsInvestmentAccounts.splice(Number(removeAssetAccount.dataset.removeAssetAccount), 1);
-    saveState();
+    saveFinancialProfileMutation(account);
     renderProfile();
     showToast("Tracked account removed");
     return;
@@ -3631,7 +3631,7 @@ document.addEventListener("click", async (event) => {
     const account = currentAccount();
     const [index, type] = assetTypeButton.dataset.assetType.split(".");
     account.savingsInvestmentAccounts[Number(index)].type = type;
-    saveState();
+    saveFinancialProfileMutation(account);
     renderProfile();
     return;
   }
@@ -3645,7 +3645,7 @@ document.addEventListener("click", async (event) => {
       bill.dueDay = "";
       bill.amount = "";
     }
-    saveState();
+    saveFinancialProfileMutation(account);
     renderProfile();
     return;
   }
@@ -3767,7 +3767,7 @@ document.addEventListener("click", async (event) => {
     const account = currentAccount();
     const [type, index] = removeProfileItem.dataset.removeProfileItem.split(".");
     account.financialInventory[type].splice(Number(index), 1);
-    saveState();
+    saveFinancialProfileMutation(account);
     renderProfile();
     return;
   }
@@ -4285,7 +4285,7 @@ document.addEventListener("input", (event) => {
     const [index, field] = assetInput.dataset.assetPath.split(".");
     account.savingsInvestmentAccounts[Number(index)][field] = assetInput.value;
     if (field === "balance") saveAssetHistoryEntry(account, index);
-    saveState();
+    saveFinancialProfileMutation(account);
     refreshFinancialProfileSummary(account);
     return;
   }
@@ -4295,7 +4295,7 @@ document.addEventListener("input", (event) => {
     if (!validateControlledInput(profileInput)) return;
     const account = currentAccount();
     setAtPath(account, profileInput.dataset.profilePath, profileInput.value);
-    saveState();
+    saveFinancialProfileMutation(account);
     refreshFinancialProfileSummary(account);
     return;
   }
@@ -4320,7 +4320,7 @@ document.addEventListener("change", async (event) => {
     const [index, field] = assetInput.dataset.assetPath.split(".");
     account.savingsInvestmentAccounts[Number(index)][field] = assetInput.value;
     if (field === "balance" || field === "updatedAt") saveAssetHistoryEntry(account, index);
-    saveState();
+    saveFinancialProfileMutation(account);
     if (field === "balance" || field === "updatedAt") renderProfile();
     return;
   }
@@ -4330,7 +4330,7 @@ document.addEventListener("change", async (event) => {
     const account = currentAccount();
     account.financialInventory.creditCards[Number(profilePromoType.dataset.profilePromoType)].promoType =
       profilePromoType.value;
-    saveState();
+    saveFinancialProfileMutation(account);
     renderProfile();
     return;
   }
@@ -4340,7 +4340,7 @@ document.addEventListener("change", async (event) => {
     if (!validateControlledInput(profileInput)) return;
     const account = currentAccount();
     setAtPath(account, profileInput.dataset.profilePath, profileInput.value);
-    saveState();
+    saveFinancialProfileMutation(account);
     return;
   }
 
@@ -4350,7 +4350,7 @@ document.addEventListener("change", async (event) => {
     const [type, index] = profilePromoInput.dataset.profilePromoToggle.split(".");
     account.financialInventory[type][Number(index)].promotionalRateApplied =
       profilePromoInput.checked;
-    saveState();
+    saveFinancialProfileMutation(account);
     renderProfile();
     return;
   }
