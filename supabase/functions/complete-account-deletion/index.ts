@@ -138,12 +138,8 @@ Deno.serve(async (request) => {
     }
     const { error: deleteError } = await adminClient.auth.admin.deleteUser(deletionRequest.user_id);
     if (deleteError && !/not found|does not exist/i.test(deleteError.message || "")) throw deleteError;
-    await adminClient
-      .from("account_deletion_requests")
-      .update({ used_at: new Date().toISOString() })
-      .eq("id", deletionRequest.id);
 
-    return new Response(JSON.stringify({ ok: true }), {
+    return new Response(JSON.stringify({ ok: true, deleted: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
