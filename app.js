@@ -20,8 +20,12 @@ let pendingPaystubUpload = null;
 const urlParameters = new URLSearchParams(window.location.search);
 const inviteCoachFromUrl = urlParameters.get("coachInvite");
 const passwordResetFromUrl = urlParameters.get("passwordReset") === "1";
+const verifyDeleteAccountFromUrl = urlParameters.get("verifyDeleteAccount") === "1";
+const deleteVerificationEmail = normalizeEmail(urlParameters.get("email"));
+const deleteVerificationToken = String(urlParameters.get("token") || "");
 if (inviteCoachFromUrl) localStorage.setItem("fit-pending-coach-invite", normalizeEmail(inviteCoachFromUrl));
 if (passwordResetFromUrl) loginMode = "reset";
+if (verifyDeleteAccountFromUrl) loginMode = "delete-verify";
 
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
@@ -191,6 +195,7 @@ function ensureAccountModel(account) {
   account.profilePhoto ||= null;
   account.spousePhoto ||= null;
   account.coachName ||= "";
+  account.lastActiveAt ||= null;
   account.profileCompleted = Object.hasOwn(account, "profileCompleted")
     ? Boolean(account.profileCompleted)
     : true;
@@ -291,6 +296,94 @@ function mergeBillRows(carriedBills = [], profileBills = []) {
     merged.push({ ...blankBill(), ...clone(bill), coachDecision: "" });
   });
   return merged;
+}
+
+function syncWorksheetBillsWithProfile(existingBills = [], profileBills = []) {
+  const profileByName = new Map(
+    profileBills
+      .filter((bill) => bill.name)
+      .map((bill) => [String(bill.name).trim().toLowerCase(), recurringBillToWorksheetBill(bill)]),
+  );
+  const synced = existingBills
+    .filter((bill) => bill.name)
+    .map((bill) => {
+      const profileBill = profileByName.get(String(bill.name).trim().toLowerCase());
+      if (!profileBill) return clone(bill);
+      profileByName.delete(String(bill.name).trim().toLowerCase());
+      return {
+        ...blankBill(),
+        ...clone(bill),
+        ...profileBill,
+        coachDecision: bill.coachDecision || "",
+      };
+    });
+  profileByName.forEach((bill) => synced.push(bill));
+  while (synced.length < 3) synced.push(blankBill());
+  return synced;
+}
+
+function syncWorksheetAccountsWithProfile(existingRows = [], profileRows = [], blankFactory, minimumRows) {
+  const profileByAccount = new Map(
+    profileRows
+      .filter((row) => row.account)
+      .map((row) => [String(row.account).trim().toLowerCase(), clone(row)]),
+  );
+  const synced = existingRows
+    .filter((row) => row.account)
+    .map((row) => {
+      const key = String(row.account).trim().toLowerCase();
+      const profileRow = profileByAccount.get(key);
+      if (!profileRow) return clone(row);
+      profileByAccount.delete(key);
+      return {
+        ...blankFactory(),
+        ...clone(row),
+        ...profileRow,
+        contribution: row.contribution || "",
+        coachDecision: row.coachDecision || "",
+      };
+    });
+  profileByAccount.forEach((row) => synced.push({ ...blankFactory(), ...row }));
+  while (synced.length < minimumRows) synced.push(blankFactory());
+  return synced;
+}
+
+function syncDraftFormsWithFinancialProfile(account) {
+  ensureFinancialInventory(account);
+  const savingsTotal = profileSavingsTotal(account);
+  Object.values(appState.forms)
+    .filter((form) => form.ownerEmail === account.email && form.status === "draft")
+    .forEach((form) => {
+      form.ownerName = account.name;
+      form.assignedName =
+        form.assignedPerson === "spouse" && account.profile.spouseName
+          ? account.profile.spouseName
+          : account.name;
+      billGroups.forEach(([key]) => {
+        const profileBills = account.financialInventory.recurringBills.filter(
+          (bill) => bill.category === key,
+        );
+        form.data.bills[key] = syncWorksheetBillsWithProfile(form.data.bills[key], profileBills);
+      });
+      form.data.creditCards = syncWorksheetAccountsWithProfile(
+        form.data.creditCards,
+        account.financialInventory.creditCards,
+        blankCreditCard,
+        2,
+      );
+      form.data.creditCards.forEach(migratePromoCard);
+      form.data.debts = syncWorksheetAccountsWithProfile(
+        form.data.debts,
+        account.financialInventory.debts,
+        blankDebt,
+        3,
+      );
+      if (account.savingsInvestmentAccounts.some((item) => item.type === "savings")) {
+        form.data.savings.current = String(savingsTotal);
+      }
+      form.generatedFromProfile = true;
+      form.updatedAt = new Date().toISOString();
+    });
 }
 
 function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerson = "account_holder") {
@@ -693,6 +786,7 @@ async function saveFinancialProfileNow() {
       account.profile.maritalStatus === "married" ? data.get("spouseName").trim() : "";
     account.profileCompleted = profileIsComplete(account);
   }
+  if (account) syncDraftFormsWithFinancialProfile(account);
   if (!saveState()) return;
   try {
     await productionBackend.saveNow?.(appState);
@@ -704,6 +798,33 @@ async function saveFinancialProfileNow() {
 
 function currentAccount() {
   return appState.accounts[appState.sessionEmail] || null;
+}
+
+function activityStatus(account) {
+  const lastActive = account?.lastActiveAt ? new Date(account.lastActiveAt).getTime() : 0;
+  const elapsed = Date.now() - lastActive;
+  if (lastActive && elapsed < 2 * 60 * 1000) return { label: "Online", className: "online" };
+  if (lastActive && elapsed < 24 * 60 * 60 * 1000) return { label: "Last active recently", className: "recent" };
+  return { label: "Offline", className: "offline" };
+}
+
+function activityBadge(account) {
+  if (!productionBackend.config?.presenceEnabled) return "";
+  const status = activityStatus(account);
+  return `<span class="activity-status ${status.className}"><i aria-hidden="true"></i>${status.label}</span>`;
+}
+
+function touchActivity() {
+  const account = currentAccount();
+  if (!account) return;
+  account.lastActiveAt = new Date().toISOString();
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+  } catch {}
+  if (!productionBackend.config?.presenceEnabled) return;
+  productionBackend.updatePresence?.(account.lastActiveAt).catch((error) => {
+    console.warn("Could not update activity status", error);
+  });
 }
 
 async function completePendingCoachInvite() {
@@ -869,34 +990,38 @@ function getMemberCarryForward(account) {
       mustPayBy: latest.data.mortgage.mustPayBy,
       remainingBefore: String(latestCalc.mortgageAfter || ""),
     },
-    creditCards: latest.data.creditCards
-      .filter((card) => card.account)
-      .map((card) => ({
-        account: card.account,
-        dueDate: card.dueDate,
-        amountDue: String(
-          Math.max(0, (Number(card.amountDue) || 0) - (Number(card.contribution) || 0)),
-        ),
-        apr: card.apr,
-        promoType: card.promoType || "none",
-        purchasePromoRate: card.purchasePromoRate || "",
-        purchasePromoExpiration: card.purchasePromoExpiration || "",
-        balanceTransferPromoRate: card.balanceTransferPromoRate || "",
-        balanceTransferPromoExpiration: card.balanceTransferPromoExpiration || "",
-      })),
+    creditCards: account.financialInventory.creditCards.length
+      ? clone(account.financialInventory.creditCards)
+      : latest.data.creditCards
+          .filter((card) => card.account)
+          .map((card) => ({
+            account: card.account,
+            dueDate: card.dueDate,
+            amountDue: String(
+              Math.max(0, (Number(card.amountDue) || 0) - (Number(card.contribution) || 0)),
+            ),
+            apr: card.apr,
+            promoType: card.promoType || "none",
+            purchasePromoRate: card.purchasePromoRate || "",
+            purchasePromoExpiration: card.purchasePromoExpiration || "",
+            balanceTransferPromoRate: card.balanceTransferPromoRate || "",
+            balanceTransferPromoExpiration: card.balanceTransferPromoExpiration || "",
+          })),
     savings: {
       goal: latest.data.savings.goal,
       current: profileSavings,
     },
-    debts: latest.data.debts
-      .filter((debt) => debt.account)
-      .map((debt) => ({
-        ...clone(debt),
-        totalOwed: String(
-          Math.max(0, (Number(debt.totalOwed) || 0) - (Number(debt.contribution) || 0)),
-        ),
-        contribution: "",
-      })),
+    debts: account.financialInventory.debts.length
+      ? clone(account.financialInventory.debts)
+      : latest.data.debts
+          .filter((debt) => debt.account)
+          .map((debt) => ({
+            ...clone(debt),
+            totalOwed: String(
+              Math.max(0, (Number(debt.totalOwed) || 0) - (Number(debt.contribution) || 0)),
+            ),
+            contribution: "",
+          })),
   };
 }
 
@@ -976,7 +1101,7 @@ function calculate(form) {
 function render() {
   const account = currentAccount();
   applyTheme();
-  if (loginMode === "reset") {
+  if (loginMode === "reset" || loginMode === "delete-verify") {
     renderLogin();
     return;
   }
@@ -1025,6 +1150,28 @@ function render() {
 }
 
 function renderLogin() {
+  if (loginMode === "delete-verify") {
+    const validLink = validEmail(deleteVerificationEmail) && deleteVerificationToken.length >= 60;
+    app.innerHTML = `
+      <main class="login-shell">
+        <section class="login-brand">
+          <div class="brand-lockup"><img src="assets/fit-logo-exact-transparent.png" alt="FIT Financial Integrity Training" /></div>
+          <div class="brand-statement"><div class="brand-rule"></div><h1>Protecting your account comes first.</h1><p>Account deletion only proceeds after a secure, one-time verification.</p></div>
+          <div class="login-footer-meta"><span class="login-caption">Secure account verification</span><span>Privacy &amp; Security</span></div>
+        </section>
+        <section class="login-panel">
+          <div class="login-box">
+            <p class="eyebrow">Account deletion verification</p>
+            <h2>${validLink ? "Permanently delete this account?" : "This verification link is invalid"}</h2>
+            <p>${validLink ? `This will permanently delete the F.I.T. account for <strong>${escapeHtml(deleteVerificationEmail)}</strong>. This cannot be undone.` : "The link is incomplete or invalid. Request a new deletion link from account settings."}</p>
+            ${validLink ? `<form id="complete-account-deletion-form" class="form-stack"><button class="btn btn-danger" type="submit">Permanently delete account</button><button class="btn btn-secondary" type="button" data-cancel-delete-verification>Keep my account</button></form>` : `<button class="btn btn-secondary" type="button" data-cancel-delete-verification>Return to sign in</button>`}
+          </div>
+        </section>
+      </main>
+    `;
+    return;
+  }
+
   if (loginMode === "forgot") {
     app.innerHTML = `
       <main class="login-shell">
@@ -1283,8 +1430,10 @@ function renderProfile() {
       <section class="profile-layout">
         ${personalProfilePanel(account)}
         <aside class="profile-summary-stack">
-          ${profilePhotoPanel(account, true)}
-          ${account.profile.maritalStatus === "married" ? spousePhotoPanel(account, true) : ""}
+          <div class="profile-photo-row">
+            ${profilePhotoPanel(account, true)}
+            ${account.profile.maritalStatus === "married" ? spousePhotoPanel(account, true) : ""}
+          </div>
           ${metric("Current savings", money(currentSavings))}
           ${metric("Tracked assets", money(assetTotal))}
           ${metric("Remaining debt", money(totalDebt))}
@@ -1558,7 +1707,7 @@ function coachProfileCard(member) {
   const totalDebt = profileDebtTotal(member);
   return `
     <article class="panel coach-profile">
-      <div class="panel-heading"><div class="profile-heading-person">${avatarMarkup(member, "avatar-lg")}<div><h3>${escapeHtml(member.name)}</h3><p>${escapeHtml(member.email)}</p></div></div><span class="badge green">${escapeHtml(profileRelationship(member))}</span></div>
+      <div class="panel-heading"><div class="profile-heading-person">${avatarMarkup(member, "avatar-lg")}<div><h3>${escapeHtml(member.name)}</h3><p>${escapeHtml(member.email)}</p>${activityBadge(member)}</div></div><span class="badge green">${escapeHtml(profileRelationship(member))}</span></div>
       <div class="profile-facts">
         ${profileFact("Spouse", member.profile.spouseName || "Not provided")}
         ${profileFact("Employer", member.profile.employer || "Not provided")}
@@ -1839,7 +1988,7 @@ function renderCoachConnection() {
           account.coachEmail && account.coachRequestStatus === "approved"
             ? `<div class="connection-current">
                 ${avatarMarkup(coach || account.coachName || account.coachEmail)}
-                <div><p class="eyebrow">Connected coach</p><h3>${escapeHtml(coach?.name || account.coachName || "F.I.T. coach")}</h3><p>${escapeHtml(account.coachEmail)}</p></div>
+                <div><p class="eyebrow">Connected coach</p><h3>${escapeHtml(coach?.name || account.coachName || "F.I.T. coach")}</h3><p>${escapeHtml(account.coachEmail)}</p>${activityBadge(coach)}</div>
                 <span class="badge green">Approved</span>
               </div>`
             : account.coachEmail
@@ -1885,7 +2034,7 @@ function requestCard(request) {
 function memberConnectionCard(member) {
   return `
     <article class="request-card">
-      <div class="person-row">${avatarMarkup(member)}<div><strong>${escapeHtml(member.name)}</strong><span>${escapeHtml(member.email)}</span></div></div>
+      <div class="person-row">${avatarMarkup(member)}<div><strong>${escapeHtml(member.name)}</strong><span>${escapeHtml(member.email)}</span>${activityBadge(member)}</div></div>
       <div class="button-row"><span class="badge green">Connected</span><button class="btn btn-danger btn-small" type="button" data-remove-mentee="${member.email}">Remove</button></div>
     </article>
   `;
@@ -1918,6 +2067,7 @@ function renderAbout() {
           <p class="eyebrow">Founded in ministry</p>
           <h3>F.I.T. was created by Pastor A. Griffith of God Cannot Lie Ministries</h3>
           <p>Pastor A. Griffith created Financial Integrity Training as a practical stewardship program for the members of God Cannot Lie Ministries. His model translated financial wisdom into a clear worksheet, helping members understand their income, plan each bill, address debt, build savings, and move forward with accountability.</p>
+          <p>F.I.T. is built to help individuals and families use creative financial strategies to advance financially while keeping biblical priorities in order, including honoring God through tithing first.</p>
           <p>Inspired by the impact of Pastor A. Griffith's financial wisdom, this financial training interface was later developed to carry his original model into an accessible digital experience. Members can preserve their financial history, prepare new plans, and securely share progress with a trusted financial coach.</p>
         </div>
       </section>
@@ -1975,12 +2125,40 @@ function renderSettings() {
           <button class="theme-choice ${account.preferences.theme === "dark" ? "active" : ""}" type="button" data-theme-choice="dark"><span class="theme-preview dark-preview"></span><strong>Dark mode</strong><small>Navy surfaces with gold borders</small></button>
         </div>
       </section>
+      <section class="panel danger-zone">
+        <div class="panel-heading"><div><h3>Delete account</h3><p>Permanently remove your ${account.role === "coach" ? "coach" : "member"} account and private F.I.T. data.</p></div></div>
+        <div class="panel-body danger-zone-body"><p>Deletion requires a unique, one-time verification link sent to <strong>${escapeHtml(account.email)}</strong>. Your account remains active unless that request is verified.${productionBackend.config?.accountDeletionEnabled ? "" : " Secure deletion is awaiting backend activation."}</p><button class="btn btn-danger" type="button" data-request-account-deletion ${productionBackend.config?.accountDeletionEnabled ? "" : "disabled"}>Delete Account</button></div>
+      </section>
     </div>
   `;
   app.innerHTML = shell(content, {
     title: "Settings",
     subtitle: "Appearance and account preferences",
   });
+}
+
+function showDeleteAccountModal() {
+  if (!productionBackend.config?.accountDeletionEnabled) {
+    showToast("Secure account deletion is awaiting backend activation.");
+    return;
+  }
+  const account = currentAccount();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-account-title">
+      <div class="modal-header"><div><p class="eyebrow">High-risk action</p><h3 id="delete-account-title">Are you sure?</h3></div><button class="icon-btn" type="button" aria-label="Close" data-close-modal>×</button></div>
+      <div class="modal-body">
+        <p>Requesting deletion will send a one-time verification link to <strong>${escapeHtml(account.email)}</strong>. Nothing will be deleted until that link is verified and deletion is confirmed.</p>
+        <form id="request-account-deletion-form" class="form-stack">
+          <label class="check-control"><input type="checkbox" name="understood" required><span>I understand that verified account deletion is permanent.</span></label>
+          <button class="btn btn-danger" type="submit">Send deletion verification email</button>
+          <button class="btn btn-secondary" type="button" data-close-modal>Cancel</button>
+        </form>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(modal);
 }
 
 function renderSessions() {
@@ -2341,7 +2519,7 @@ function menteeSavingsCard(member) {
   const progress = goal ? Math.min(100, (current / goal) * 100) : 0;
   return `
     <article class="form-card">
-      <div class="form-card-top"><div class="person-row">${avatarMarkup(member)}<div><h3>${escapeHtml(member.name)}</h3><p>${escapeHtml(member.email)} · ${escapeHtml(profileRelationship(member))}</p></div></div><span class="badge green">Mentee</span></div>
+      <div class="form-card-top"><div class="person-row">${avatarMarkup(member)}<div><h3>${escapeHtml(member.name)}</h3><p>${escapeHtml(member.email)} · ${escapeHtml(profileRelationship(member))}</p>${activityBadge(member)}</div></div><span class="badge green">Mentee</span></div>
       <div class="savings-mini-stats"><strong>${money(current)}</strong><span>of ${money(goal)} saved</span></div>
       ${progressBar(progress, `${money(Math.max(0, goal - current))} left`)}
     </article>
@@ -3308,6 +3486,13 @@ async function createAccount(name, email, password, role) {
 }
 
 document.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-cancel-delete-verification]")) {
+    history.replaceState({}, "", window.location.pathname);
+    loginMode = "signin";
+    render();
+    return;
+  }
+
   const loginModeButton = event.target.closest("[data-login-mode]");
   if (loginModeButton) {
     loginMode = loginModeButton.dataset.loginMode;
@@ -3415,6 +3600,11 @@ document.addEventListener("click", async (event) => {
 
   if (event.target.closest("[data-save-financial-profile]")) {
     await saveFinancialProfileNow();
+    return;
+  }
+
+  if (event.target.closest("[data-request-account-deletion]")) {
+    showDeleteAccountModal();
     return;
   }
 
@@ -3591,6 +3781,15 @@ document.addEventListener("click", async (event) => {
   }
 
   if (event.target.closest("[data-sign-out]")) {
+    const account = currentAccount();
+    if (account) {
+      account.lastActiveAt = null;
+      try {
+        await productionBackend.updatePresence?.(null);
+      } catch (error) {
+        console.warn("Could not update offline status", error);
+      }
+    }
     if (productionBackend.enabled) {
       try {
         await productionBackend.signOut();
@@ -3751,6 +3950,45 @@ document.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (event.target.id === "request-account-deletion-form") {
+    event.preventDefault();
+    if (!productionBackend.enabled) {
+      showToast("Account deletion verification is only available on the secure live site.");
+      return;
+    }
+    const submitButton = event.target.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    try {
+      await productionBackend.requestAccountDeletion();
+      event.target.closest(".modal-backdrop")?.remove();
+      showToast("F.I.T. deletion verification link sent. Your account remains active.");
+    } catch (error) {
+      submitButton.disabled = false;
+      showToast(authErrorMessage(error, "send the deletion verification email"));
+    }
+    return;
+  }
+
+  if (event.target.id === "complete-account-deletion-form") {
+    event.preventDefault();
+    const submitButton = event.target.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    try {
+      await productionBackend.completeAccountDeletion(deleteVerificationEmail, deleteVerificationToken);
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem("fit-pending-coach-invite");
+      appState = defaultState();
+      history.replaceState({}, "", window.location.pathname);
+      loginMode = "signin";
+      renderLogin();
+      showToast("Your F.I.T. account has been permanently deleted.");
+    } catch (error) {
+      submitButton.disabled = false;
+      showToast(error.message || "This deletion verification link is invalid or expired.");
+    }
+    return;
+  }
+
   if (event.target.id === "verification-form") {
     event.preventDefault();
     if (productionBackend.enabled) {
@@ -3901,6 +4139,7 @@ document.addEventListener("submit", async (event) => {
         form.ownerName = account.name;
       });
     account.profileCompleted = profileIsComplete(account);
+    syncDraftFormsWithFinancialProfile(account);
     saveState();
     if (account.profileCompleted) {
       activeView = "dashboard";
@@ -4314,7 +4553,9 @@ async function initializePortal() {
       showToast("The secure portal could not connect. Please try again.");
     }
   }
+  touchActivity();
   render();
 }
 
 initializePortal();
+setInterval(touchActivity, 60 * 1000);
