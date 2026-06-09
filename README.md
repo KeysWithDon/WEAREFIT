@@ -56,7 +56,7 @@ Supabase recommends custom SMTP for production Auth emails because the default s
 
 ## Account deletion deployment
 
-Account deletion uses expiring, one-time hashed verification tokens and must be deployed with the project-owner Supabase account:
+Coach and member account deletion uses expiring, one-time hashed verification tokens and must be deployed with the project-owner Supabase account:
 
 ```bash
 supabase db push
