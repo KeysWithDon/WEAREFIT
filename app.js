@@ -2126,8 +2126,8 @@ function renderSettings() {
         </div>
       </section>
       <section class="panel danger-zone">
-        <div class="panel-heading"><div><h3>Delete account</h3><p>Permanently remove your ${account.role === "coach" ? "coach" : "member"} account and private F.I.T. data.</p></div></div>
-        <div class="panel-body danger-zone-body"><p>Deletion requires a unique, one-time verification link sent to <strong>${escapeHtml(account.email)}</strong>. Your account remains active unless that request is verified.${productionBackend.config?.accountDeletionEnabled ? "" : " Secure deletion is awaiting backend activation."}</p><button class="btn btn-danger" type="button" data-request-account-deletion ${productionBackend.config?.accountDeletionEnabled ? "" : "disabled"}>Delete Account</button></div>
+        <div class="panel-heading"><div><h3>Delete account</h3><p>Delete your F.I.T. account and saved data.</p></div></div>
+        <div class="panel-body danger-zone-body"><p>We will email a secure confirmation link to <strong>${escapeHtml(account.email)}</strong>.${productionBackend.config?.accountDeletionEnabled ? "" : " This option is not available yet."}</p><button class="btn btn-danger" type="button" data-request-account-deletion ${productionBackend.config?.accountDeletionEnabled ? "" : "disabled"}>Delete account</button></div>
       </section>
     </div>
   `;
@@ -2139,7 +2139,7 @@ function renderSettings() {
 
 function showDeleteAccountModal() {
   if (!productionBackend.config?.accountDeletionEnabled) {
-    showToast("Secure account deletion is awaiting backend activation.");
+    showToast("Account deletion is not available yet.");
     return;
   }
   const account = currentAccount();
@@ -2147,12 +2147,12 @@ function showDeleteAccountModal() {
   modal.className = "modal-backdrop";
   modal.innerHTML = `
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-account-title">
-      <div class="modal-header"><div><p class="eyebrow">High-risk action</p><h3 id="delete-account-title">Are you sure?</h3></div><button class="icon-btn" type="button" aria-label="Close" data-close-modal>×</button></div>
+      <div class="modal-header"><div><p class="eyebrow">Account deletion</p><h3 id="delete-account-title">Delete your account?</h3></div><button class="icon-btn" type="button" aria-label="Close" data-close-modal>×</button></div>
       <div class="modal-body">
-        <p>Requesting deletion will send a one-time verification link to <strong>${escapeHtml(account.email)}</strong>. Nothing will be deleted until that link is verified and deletion is confirmed.</p>
+        <p>We will email a secure link to <strong>${escapeHtml(account.email)}</strong>. Open it to confirm deletion.</p>
         <form id="request-account-deletion-form" class="form-stack">
-          <label class="check-control"><input type="checkbox" name="understood" required><span>I understand that verified account deletion is permanent.</span></label>
-          <button class="btn btn-danger" type="submit">Send deletion verification email</button>
+          <label class="check-control"><input type="checkbox" name="understood" required><span>I understand this cannot be undone.</span></label>
+          <button class="btn btn-danger" type="submit">Email deletion link</button>
           <button class="btn btn-secondary" type="button" data-close-modal>Cancel</button>
         </form>
       </div>
