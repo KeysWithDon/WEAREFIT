@@ -35,6 +35,15 @@ Deno.serve(async (request) => {
     if (authError || !authData.user?.email) throw new Error("Authentication required.");
 
     const email = normalizeEmail(authData.user.email);
+    const { data: profile, error: profileError } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", authData.user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile || !["user", "coach"].includes(profile.role)) {
+      throw new Error("This account type cannot be deleted.");
+    }
     const token = `${crypto.randomUUID()}${crypto.randomUUID().replaceAll("-", "")}`;
     const tokenHash = await sha256(token);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
@@ -46,6 +55,7 @@ Deno.serve(async (request) => {
     const { error: insertError } = await adminClient.from("account_deletion_requests").insert({
       user_id: authData.user.id,
       email,
+      account_role: profile.role,
       token_hash: tokenHash,
       expires_at: expiresAt,
     });
