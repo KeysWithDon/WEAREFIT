@@ -2322,14 +2322,12 @@ function renderDashboard() {
     const pendingRequests = appState.coachRequests.filter(
       (request) => request.coachEmail === account.email && request.status === "pending",
     );
-    const totalDebt = sharedForms.reduce((sum, form) => sum + calculate(form).totalDebt, 0);
     const content = `
       <div class="content">
         ${dashboardBanner(account, true)}
         <section class="metric-grid" aria-label="Coach overview">
           ${metric("Mentees", mentees.length)}
           ${metric("Documents to review", reviewForms.length)}
-          ${metric("Combined debt", money(totalDebt))}
           ${metric("Mentee requests", pendingRequests.length)}
         </section>
         ${coachQuickOverview(mentees, sharedForms, withdrawals)}
