@@ -54,6 +54,20 @@ https://god-cannot-lie-ministries.github.io/WEAREFIT/
 
 Supabase recommends custom SMTP for production Auth emails because the default sender is limited and not intended for real users. See the official Supabase SMTP guide: https://supabase.com/docs/guides/auth/auth-smtp
 
+## Account deletion deployment
+
+Account deletion uses expiring, one-time hashed verification tokens and must be deployed with the project-owner Supabase account:
+
+```bash
+supabase db push
+supabase functions deploy request-account-deletion
+supabase functions deploy complete-account-deletion --no-verify-jwt
+```
+
+The functions require `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_URL` secrets. Use `WEAREFIT <verification@notifications.fit-training.org>` for `EMAIL_FROM`.
+
+After deployment, set the GitHub Actions variables `ACCOUNT_DELETION_ENABLED` and `PRESENCE_ENABLED` to `true`, then redeploy the site.
+
 ## Resend setup
 
 Use this sending domain:
