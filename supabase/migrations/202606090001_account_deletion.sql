@@ -2,11 +2,22 @@ create table if not exists public.account_deletion_requests (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   email text not null,
+  account_role text not null check (account_role in ('user', 'coach')),
   token_hash text not null unique,
   expires_at timestamptz not null,
   used_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.account_deletion_requests
+add column if not exists account_role text;
+
+alter table public.account_deletion_requests
+drop constraint if exists account_deletion_requests_account_role_check;
+
+alter table public.account_deletion_requests
+add constraint account_deletion_requests_account_role_check
+check (account_role in ('user', 'coach'));
 
 create index if not exists account_deletion_requests_lookup
 on public.account_deletion_requests (email, token_hash);
