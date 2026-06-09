@@ -4,4 +4,6 @@ window.WEAREFIT_CONFIG = {
   supabasePublishableKey: "",
   appUrl: "https://fit-training.org/",
   emailDomain: "notifications.fit-training.org",
+  accountDeletionEnabled: false,
+  presenceEnabled: false,
 };
