@@ -3068,14 +3068,27 @@ html[data-theme="dark"] .onboarding-banner strong {
 }
 
 @media (max-width: 840px) {
+  .login-brand .brand-lockup {
+    width: 100%;
+    align-items: center;
+    text-align: center;
+  }
+
+  .login-brand .brand-lockup img {
+    margin-inline: auto;
+  }
+
   .sidebar-brand {
     min-height: 92px;
     align-items: center;
     flex-direction: row;
+    justify-content: center;
+    text-align: center;
   }
 
   .sidebar-brand img {
     width: 145px;
+    margin-inline: auto;
   }
 
   .sidebar-account {
