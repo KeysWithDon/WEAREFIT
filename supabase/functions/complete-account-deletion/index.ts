@@ -23,7 +23,7 @@ Deno.serve(async (request) => {
     const tokenHash = await sha256(String(token));
     const { data: deletionRequest, error: lookupError } = await adminClient
       .from("account_deletion_requests")
-      .select("id, user_id, email, expires_at, used_at")
+      .select("id, user_id, email, account_role, expires_at, used_at")
       .eq("email", email)
       .eq("token_hash", tokenHash)
       .maybeSingle();
@@ -31,6 +31,19 @@ Deno.serve(async (request) => {
     if (!deletionRequest) throw new Error("This verification link is invalid.");
     if (deletionRequest.used_at) throw new Error("This verification link has already been used.");
     if (new Date(deletionRequest.expires_at) <= new Date()) throw new Error("This verification link has expired.");
+    const { data: profile, error: profileError } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", deletionRequest.user_id)
+      .eq("email", email)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile || !["user", "coach"].includes(profile.role)) {
+      throw new Error("This account could not be verified.");
+    }
+    if (deletionRequest.account_role && deletionRequest.account_role !== profile.role) {
+      throw new Error("This verification link does not match the account.");
+    }
 
     const usedAt = new Date().toISOString();
     const { data: markedRequest, error: markError } = await adminClient
@@ -67,6 +80,12 @@ Deno.serve(async (request) => {
         member.coachName = "";
         member.coachRequestStatus = null;
       }
+      state.coachRequests = (state.coachRequests || []).filter(
+        (item: { coachEmail?: string }) => normalizeEmail(item.coachEmail) !== email,
+      );
+      state.coachInvites = (state.coachInvites || []).filter(
+        (item: { coachEmail?: string }) => normalizeEmail(item.coachEmail) !== email,
+      );
       await adminClient
         .from("portal_states")
         .update({ coach_email: null, state, updated_at: usedAt })
