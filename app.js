@@ -1101,7 +1101,7 @@ function calculate(form) {
 function render() {
   const account = currentAccount();
   applyTheme();
-  if (loginMode === "reset" || loginMode === "delete-verify") {
+  if (loginMode === "reset" || loginMode === "delete-verify" || loginMode === "delete-success") {
     renderLogin();
     return;
   }
@@ -1150,6 +1150,27 @@ function render() {
 }
 
 function renderLogin() {
+  if (loginMode === "delete-success") {
+    app.innerHTML = `
+      <main class="login-shell">
+        <section class="login-brand">
+          <div class="brand-lockup"><img src="assets/fit-logo-exact-transparent.png" alt="FIT Financial Integrity Training" /></div>
+          <div class="brand-statement"><div class="brand-rule"></div><h1>Your account has been deleted.</h1><p>Your F.I.T. account and saved portal data are no longer available.</p></div>
+          <div class="login-footer-meta"><span class="login-caption">Account deletion complete</span><span>Privacy &amp; Security</span></div>
+        </section>
+        <section class="login-panel">
+          <div class="login-box">
+            <p class="eyebrow">Deletion confirmed</p>
+            <h2>Account successfully deleted</h2>
+            <p>The account for <strong>${escapeHtml(deleteVerificationEmail)}</strong> was permanently deleted. You may close this page or return to sign in.</p>
+            <button class="btn btn-primary" type="button" data-login-mode="signin">Return to sign in</button>
+          </div>
+        </section>
+      </main>
+    `;
+    return;
+  }
+
   if (loginMode === "delete-verify") {
     const validLink = validEmail(deleteVerificationEmail) && deleteVerificationToken.length >= 60;
     app.innerHTML = `
@@ -3990,9 +4011,8 @@ document.addEventListener("submit", async (event) => {
       localStorage.removeItem("fit-pending-coach-invite");
       appState = defaultState();
       history.replaceState({}, "", window.location.pathname);
-      loginMode = "signin";
+      loginMode = "delete-success";
       renderLogin();
-      showToast("Your F.I.T. account has been permanently deleted.");
     } catch (error) {
       submitButton.disabled = false;
       showToast(error.message || "Deletion could not be completed. Try again or request a new verification link.");
