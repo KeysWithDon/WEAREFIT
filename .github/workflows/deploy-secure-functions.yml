@@ -1,12 +1,12 @@
 name: Deploy secure functions
 on:
-workflow_dispatch:
-jobs:
-deploy:
-runs-on: ubuntu-latest
-steps:
-- uses: actions/checkout@v4
-- uses: supabase/setup-cli@v1
-- run: supabase functions deploy request-account-deletion --project-ref jrkxltypsvapusybroyp && supabase functions deploy complete-account-deletion --project-ref jrkxltypsvapusybroyp --no-verify-jwt
-  env:
-  SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+  workflow_dispatch:
+  jobs:
+    deploy:
+        runs-on: ubuntu-latest
+            steps:
+                  - uses: actions/checkout@v4
+                        - uses: supabase/setup-cli@v1
+                              - run: supabase functions deploy request-account-deletion --project-ref jrkxltypsvapusybroyp && supabase functions deploy complete-account-deletion --project-ref jrkxltypsvapusybroyp --no-verify-jwt
+                                      env:
+                                                SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
