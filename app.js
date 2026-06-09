@@ -1164,7 +1164,7 @@ function renderLogin() {
             <p class="eyebrow">Account deletion verification</p>
             <h2>${validLink ? "Permanently delete this account?" : "This verification link is invalid"}</h2>
             <p>${validLink ? `This will permanently delete the F.I.T. account for <strong>${escapeHtml(deleteVerificationEmail)}</strong>. This cannot be undone.` : "The link is incomplete or invalid. Request a new deletion link from account settings."}</p>
-            ${validLink ? `<form id="complete-account-deletion-form" class="form-stack"><button class="btn btn-danger" type="submit">Permanently delete account</button><button class="btn btn-secondary" type="button" data-cancel-delete-verification>Keep my account</button></form>` : `<button class="btn btn-secondary" type="button" data-cancel-delete-verification>Return to sign in</button>`}
+            ${validLink ? `<form id="complete-account-deletion-form" class="form-stack"><button class="btn btn-danger" type="submit">Permanently delete account</button><button class="btn btn-secondary" type="button" data-resend-delete-verification>Email a new verification link</button><button class="btn btn-secondary" type="button" data-cancel-delete-verification>Keep my account</button></form>` : `<button class="btn btn-secondary" type="button" data-cancel-delete-verification>Return to sign in</button>`}
           </div>
         </section>
       </main>
@@ -3606,6 +3606,19 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (event.target.closest("[data-resend-delete-verification]")) {
+    const resendButton = event.target.closest("[data-resend-delete-verification]");
+    resendButton.disabled = true;
+    try {
+      await productionBackend.resendAccountDeletion(deleteVerificationEmail, deleteVerificationToken);
+      showToast("A new deletion verification link was sent. Use the newest email.");
+    } catch (error) {
+      resendButton.disabled = false;
+      showToast(authErrorMessage(error, "send a new deletion verification link"));
+    }
+    return;
+  }
+
   if (event.target.closest("[data-add-asset-account]")) {
     const account = currentAccount();
     account.savingsInvestmentAccounts.push(blankSavingsInvestmentAccount());
@@ -3982,7 +3995,7 @@ document.addEventListener("submit", async (event) => {
       showToast("Your F.I.T. account has been permanently deleted.");
     } catch (error) {
       submitButton.disabled = false;
-      showToast(error.message || "This deletion verification link is invalid or expired.");
+      showToast(error.message || "Deletion could not be completed. Try again or request a new verification link.");
     }
     return;
   }

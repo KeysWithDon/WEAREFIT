@@ -321,6 +321,14 @@
     return data;
   }
 
+  async function resendAccountDeletion(email, token) {
+    const { data, error } = await client.functions.invoke("complete-account-deletion", {
+      body: { action: "resend", email: normalizeEmail(email), token },
+    });
+    await throwFunctionError(error, "A new deletion verification email could not be sent.");
+    return data;
+  }
+
   async function uploadPrivateFile(bucket, file, category) {
     const currentSession = await session();
     if (!currentSession) throw new Error("Sign in before uploading a file.");
@@ -386,6 +394,7 @@
     connectCoach,
     requestAccountDeletion,
     completeAccountDeletion,
+    resendAccountDeletion,
     uploadPrivateFile,
   };
 })();

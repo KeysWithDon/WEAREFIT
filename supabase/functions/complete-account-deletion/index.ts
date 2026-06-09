@@ -5,15 +5,48 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 const normalizeEmail = (value: unknown) => String(value || "").trim().toLowerCase();
+const escapeHtml = (value: string) =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 async function sha256(value: string) {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(hash)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function sendDeletionEmail(email: string, token: string) {
+  const appUrl = Deno.env.get("APP_URL") || "https://fit-training.org/";
+  const emailFrom = Deno.env.get("EMAIL_FROM") || "WEAREFIT <verification@notifications.fit-training.org>";
+  const verifyUrl = new URL(appUrl);
+  verifyUrl.searchParams.set("verifyDeleteAccount", "1");
+  verifyUrl.searchParams.set("email", email);
+  verifyUrl.searchParams.set("token", token);
+  const safeUrl = escapeHtml(verifyUrl.toString());
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${Deno.env.get("RESEND_API_KEY")!}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: emailFrom,
+      to: [email],
+      subject: "F.I.T Verification Link",
+      text: `Use this new secure link to confirm deletion of your F.I.T. account. If you did not request this, you can safely ignore this email.\n\n${verifyUrl.toString()}`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#172033;line-height:1.6">
+        <h1 style="font-size:22px;color:#0d2859">F.I.T Verification Link</h1>
+        <p>Use this new secure link to confirm deletion of your F.I.T. account. If you did not request this, you can safely ignore this email.</p>
+        <p><a href="${safeUrl}">Verify account deletion request</a></p>
+        <p style="font-size:12px;color:#647084">Only the newest link will work. This link expires in 30 minutes.</p>
+      </div>`,
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || "A new deletion verification email could not be sent.");
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
-    const { email: rawEmail, token } = await request.json();
+    const { action, email: rawEmail, token } = await request.json();
     const email = normalizeEmail(rawEmail);
     if (!email || !token || String(token).length < 60) throw new Error("This verification link is invalid.");
     const adminClient = createClient(
@@ -45,16 +78,28 @@ Deno.serve(async (request) => {
       throw new Error("This verification link does not match the account.");
     }
 
-    const usedAt = new Date().toISOString();
-    const { data: markedRequest, error: markError } = await adminClient
-      .from("account_deletion_requests")
-      .update({ used_at: usedAt })
-      .eq("id", deletionRequest.id)
-      .is("used_at", null)
-      .select("id")
-      .maybeSingle();
-    if (markError) throw markError;
-    if (!markedRequest) throw new Error("This verification link has already been used.");
+    if (action === "resend") {
+      const replacementToken = `${crypto.randomUUID()}${crypto.randomUUID().replaceAll("-", "")}`;
+      const replacementHash = await sha256(replacementToken);
+      const replacementExpiry = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      const { error: replacementError } = await adminClient
+        .from("account_deletion_requests")
+        .update({ token_hash: replacementHash, expires_at: replacementExpiry, used_at: null })
+        .eq("id", deletionRequest.id);
+      if (replacementError) throw replacementError;
+      try {
+        await sendDeletionEmail(email, replacementToken);
+      } catch (error) {
+        await adminClient
+          .from("account_deletion_requests")
+          .update({ token_hash: tokenHash, expires_at: deletionRequest.expires_at, used_at: null })
+          .eq("id", deletionRequest.id);
+        throw error;
+      }
+      return new Response(JSON.stringify({ ok: true, resent: true }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     for (const bucket of ["profile-photos", "financial-documents"]) {
       const { data: categories } = await adminClient.storage.from(bucket).list(deletionRequest.user_id, {
@@ -88,11 +133,15 @@ Deno.serve(async (request) => {
       );
       await adminClient
         .from("portal_states")
-        .update({ coach_email: null, state, updated_at: usedAt })
+        .update({ coach_email: null, state, updated_at: new Date().toISOString() })
         .eq("owner_id", row.owner_id);
     }
     const { error: deleteError } = await adminClient.auth.admin.deleteUser(deletionRequest.user_id);
-    if (deleteError) throw deleteError;
+    if (deleteError && !/not found|does not exist/i.test(deleteError.message || "")) throw deleteError;
+    await adminClient
+      .from("account_deletion_requests")
+      .update({ used_at: new Date().toISOString() })
+      .eq("id", deletionRequest.id);
 
     return new Response(JSON.stringify({ ok: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
