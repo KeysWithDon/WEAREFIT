@@ -324,6 +324,7 @@ function normalizeStateModels(state) {
     form.data.calculatorDraft ||= "";
     form.data.calculatorJustEvaluated ||= false;
     form.data.calculatorPosition ||= null;
+    form.data.calculatorSize ||= null;
     form.data.allocations = (form.data.allocations || []).filter((item) =>
       ["debt", "credit_card", "student_loan"].includes(item.type),
     );
@@ -616,6 +617,7 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
       calculatorHistory: [],
       calculatorDraft: "",
       calculatorPosition: null,
+      calculatorSize: null,
       allocations: [],
       notes: "",
     },
@@ -1931,7 +1933,7 @@ function personalProfilePanel(account) {
   const isCoach = account.role === "coach";
   return `
     <details class="panel profile-details-panel" ${account.profileCompleted ? "" : "open"}>
-      <summary class="panel-heading profile-details-summary"><div><h3>Personal and household details</h3><p>${isCoach ? "Your name and phone number are required." : "Names, contact details, household information, and spouse details."}</p></div><div class="profile-details-status">${account.profileCompleted ? `<span class="badge green">Profile ready</span>` : `<span class="badge">Required</span>`}<span class="profile-details-chevron" aria-hidden="true">⌄</span></div></summary>
+      <summary class="panel-heading profile-details-summary"><div><h3>Personal and household details</h3><p>${isCoach ? "Your name and phone number are required." : "Names, contact details, household information, and spouse details."}</p></div><div class="profile-details-status">${account.profileCompleted ? `<span class="badge green">Profile ready</span>` : `<span class="badge">Required</span>`}<span class="profile-details-action" aria-hidden="true"></span><span class="profile-details-chevron" aria-hidden="true">⌄</span></div></summary>
       <form id="profile-form" class="panel-body profile-form-grid">
         <div class="field"><label for="profile-name">Full name</label><input id="profile-name" class="input" name="name" value="${escapeHtml(account.name)}" required></div>
         <div class="field"><label>Email address</label><input class="input" value="${escapeHtml(account.email)}" disabled></div>
@@ -1979,8 +1981,7 @@ function profilePhotoPanel(account, canEdit) {
       <div><strong>${escapeHtml(account.name)}</strong><span>${account.role === "coach" ? "F.I.T. coach" : "F.I.T. member"}</span></div>
       ${
         canEdit
-          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-profile-photo-upload accept=".png,.jpg,.jpeg,.webp">Upload photo</label>
-             ${account.profilePhoto ? `<button class="btn btn-quiet btn-small" type="button" data-remove-profile-photo>Use default avatar</button>` : ""}`
+          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-profile-photo-upload accept=".png,.jpg,.jpeg,.webp">Change photo</label>`
           : ""
       }
     </section>
@@ -1994,8 +1995,7 @@ function spousePhotoPanel(account, canEdit) {
       <div><strong>${escapeHtml(account.profile.spouseName || "Spouse")}</strong><span>Spouse profile photo</span></div>
       ${
         canEdit
-          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-spouse-photo-upload accept=".png,.jpg,.jpeg,.webp">Upload spouse photo</label>
-             ${account.spousePhoto ? `<button class="btn btn-quiet btn-small" type="button" data-remove-spouse-photo>Use default avatar</button>` : ""}`
+          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-spouse-photo-upload accept=".png,.jpg,.jpeg,.webp">Change photo</label>`
           : ""
       }
     </section>
@@ -3541,7 +3541,7 @@ function allocationPanel(form, calc, readOnly) {
 }
 
 function calculatorPanel(form, readOnly) {
-  const history = (form.data.calculatorHistory || []).slice(-5).reverse();
+  const history = (form.data.calculatorHistory || []).slice(-10).reverse();
   const keys = [
     ["AC", "utility"], ["+/-", "utility"], ["%", "utility"], ["÷", "operator"],
     ["7", "number"], ["8", "number"], ["9", "number"], ["×", "operator"],
@@ -3550,20 +3550,33 @@ function calculatorPanel(form, readOnly) {
     ["0", "number wide"], [".", "number"], ["=", "operator"],
   ];
   const position = form.data.calculatorPosition;
-  const calculatorWidth = window.innerWidth <= 620
-    ? Math.min(268, window.innerWidth - 24)
-    : Math.min(292, window.innerWidth - 24);
+  const savedSize = form.data.calculatorSize || {};
+  const compactViewport = window.innerWidth <= 620;
+  const viewportWidth = Math.max(220, window.innerWidth - 24);
+  const minWidth = Math.min(compactViewport ? 224 : 236, viewportWidth);
+  const maxWidth = Math.max(minWidth, Math.min(compactViewport ? 360 : 430, viewportWidth));
+  const defaultWidth = Math.min(compactViewport ? 268 : 292, maxWidth);
+  const savedWidth = Number(savedSize.width);
+  const calculatorWidth = savedWidth ? Math.min(Math.max(minWidth, savedWidth), maxWidth) : defaultWidth;
+  const viewportHeight = Math.max(360, window.innerHeight - 24);
+  const minHeight = Math.min(compactViewport ? 390 : 430, viewportHeight);
+  const maxHeight = Math.max(minHeight, viewportHeight);
+  const savedHeight = Number(savedSize.height);
+  const calculatorHeight = savedHeight
+    ? Math.min(Math.max(minHeight, savedHeight), maxHeight)
+    : Math.min(compactViewport ? 500 : 540, maxHeight);
   const safeLeft = position
     ? Math.min(Math.max(8, Number(position.left) || 8), Math.max(8, window.innerWidth - calculatorWidth - 8))
     : 0;
   const safeTop = position
-    ? Math.min(Math.max(8, Number(position.top) || 8), Math.max(8, window.innerHeight - 540))
+    ? Math.min(Math.max(8, Number(position.top) || 8), Math.max(8, window.innerHeight - calculatorHeight - 8))
     : 0;
-  const positionStyle = position ? `left:${safeLeft}px;top:${safeTop}px;right:auto;bottom:auto;` : "";
+  const sizeStyle = `width:${calculatorWidth}px;${savedHeight ? `height:${calculatorHeight}px;` : ""}`;
+  const positionStyle = `${sizeStyle}${position ? `left:${safeLeft}px;top:${safeTop}px;right:auto;bottom:auto;` : ""}`;
   return `<aside class="calculator-widget draggable-calculator" data-draggable-calculator="${form.id}" style="${positionStyle}">
     <div class="calculator-heading" data-calculator-drag-handle>
-      <div><h3>Live calculator</h3><p>Drag to move</p></div>
-      <span class="calculator-drag-grip" aria-label="Drag calculator" title="Drag calculator">⠿</span>
+      <div><h3>Live calculator</h3><p>Drag to move · resize from the corner</p></div>
+      <div class="calculator-tools"><span class="badge calculator-count">${history.length}/10</span><span class="calculator-drag-grip" aria-label="Drag calculator" title="Drag calculator">⠿</span></div>
     </div>
     <output class="calculator-display" aria-live="polite">${escapeHtml(form.data.calculatorDraft || "0")}</output>
     <div class="calculator-keypad" aria-label="Calculator keypad">
@@ -3603,7 +3616,7 @@ function applyCalculatorKey(form, key) {
       createdAt: new Date().toISOString(),
       authorEmail: currentAccount().email,
     });
-    form.data.calculatorHistory = form.data.calculatorHistory.slice(-5);
+    form.data.calculatorHistory = form.data.calculatorHistory.slice(-10);
     form.data.calculatorDraft = String(result);
     form.data.calculatorJustEvaluated = true;
     return true;
@@ -3671,18 +3684,36 @@ function moveCalculator(event) {
 
 function endCalculatorDrag() {
   if (!calculatorDragState) return;
-  const { calculator, formId } = calculatorDragState;
+  const { calculator } = calculatorDragState;
   calculator.classList.remove("dragging");
-  const form = appState.forms[formId];
-  if (form) {
-    form.data.calculatorPosition = {
-      left: Math.round(Number.parseFloat(calculator.style.left) || 8),
-      top: Math.round(Number.parseFloat(calculator.style.top) || 8),
-    };
-    form.updatedAt = new Date().toISOString();
-    saveState();
-  }
+  saveCalculatorGeometry(calculator);
   calculatorDragState = null;
+}
+
+function saveCalculatorGeometry(calculator) {
+  const formId = calculator?.dataset?.draggableCalculator;
+  const form = appState.forms[formId];
+  if (!form) return;
+  const rect = calculator.getBoundingClientRect();
+  form.data.calculatorPosition = {
+    left: Math.round(rect.left || 8),
+    top: Math.round(rect.top || 8),
+  };
+  form.data.calculatorSize = {
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+  form.updatedAt = new Date().toISOString();
+  saveState();
+}
+
+function handleCalculatorPointerEnd(event) {
+  if (calculatorDragState) {
+    endCalculatorDrag();
+    return;
+  }
+  const calculator = event.target?.closest?.("[data-draggable-calculator]");
+  if (calculator) saveCalculatorGeometry(calculator);
 }
 
 function notesPanel(form, readOnly) {
@@ -4366,6 +4397,7 @@ document.addEventListener("click", async (event) => {
   if (calculatorKey) {
     const form = appState.forms[calculatorKey.dataset.calculatorFormId];
     if (!form) return;
+    saveCalculatorGeometry(calculatorKey.closest("[data-draggable-calculator]"));
     try {
       const completed = applyCalculatorKey(form, calculatorKey.dataset.calculatorKey);
       form.updatedAt = new Date().toISOString();
@@ -5719,8 +5751,8 @@ async function validateCurrentAccount() {
 initializePortal();
 document.addEventListener("pointerdown", beginCalculatorDrag);
 document.addEventListener("pointermove", moveCalculator);
-document.addEventListener("pointerup", endCalculatorDrag);
-document.addEventListener("pointercancel", endCalculatorDrag);
+document.addEventListener("pointerup", handleCalculatorPointerEnd);
+document.addEventListener("pointercancel", handleCalculatorPointerEnd);
 setInterval(() => {
   checkInactivityLogout();
   validateCurrentAccount();
