@@ -4153,13 +4153,17 @@ html[data-theme="dark"] .onboarding-banner strong {
 }
 
 .draggable-calculator .calculator-keypad {
-  width: 100%;
+  --calculator-key-size: clamp(30px, min(18cqw, 11cqh), 62px);
+  --calculator-key-gap: clamp(5px, min(2.5cqw, 1.6cqh), 10px);
+  grid-template-columns: repeat(4, var(--calculator-key-size));
+  width: fit-content;
+  max-width: 100%;
   margin-inline: auto;
-  gap: clamp(3px, 2cqw, 8px);
+  gap: var(--calculator-key-gap);
+  justify-content: center;
 }
 
 .draggable-calculator .calculator-key {
-  --calculator-key-size: clamp(30px, min(18cqw, 11cqh), 62px);
   width: var(--calculator-key-size);
   height: var(--calculator-key-size);
   min-height: 0;
@@ -4175,8 +4179,8 @@ html[data-theme="dark"] .onboarding-banner strong {
 }
 
 .draggable-calculator .calculator-key.wide {
-  width: 100%;
-  max-width: calc((var(--calculator-key-size) * 2) + clamp(3px, 2cqw, 8px));
+  width: calc((var(--calculator-key-size) * 2) + var(--calculator-key-gap));
+  max-width: none;
   aspect-ratio: auto;
   border-radius: 999px;
   padding-left: 24%;
