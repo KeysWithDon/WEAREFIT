@@ -2951,6 +2951,35 @@ html[data-theme="dark"] .sidebar-brand img {
   grid-row: 1 / 3;
 }
 
+.joint-avatar-stack {
+  display: inline-flex;
+  align-items: center;
+  min-width: 58px;
+}
+
+.joint-avatar-stack .avatar {
+  grid-row: auto;
+}
+
+.joint-avatar-stack .avatar + .avatar {
+  margin-left: -12px;
+  border: 2px solid var(--surface);
+}
+
+.assignment-choice .joint-avatar-stack {
+  grid-row: 1 / 3;
+}
+
+.profile-heading-person .joint-avatar-stack {
+  flex: 0 0 auto;
+}
+
+.profile-heading-person .joint-avatar-stack.avatar-lg .avatar {
+  width: 46px;
+  height: 46px;
+  flex-basis: 46px;
+}
+
 .assignment-choice small {
   color: var(--muted);
 }
