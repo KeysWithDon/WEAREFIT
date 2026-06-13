@@ -298,6 +298,7 @@ function ensureAccountModel(account) {
 }
 
 function normalizeStateModels(state) {
+  state.notifications ||= [];
   Object.values(state.accounts || {}).forEach(ensureAccountModel);
   Object.values(state.forms || {}).forEach((form) => {
     if (form.assignedPerson === "both") {
@@ -319,6 +320,8 @@ function normalizeStateModels(state) {
     form.data.mortgage = { totalAmount: "", interestRate: "", currentBalance: "", paymentAmount: "", nextDueDate: "", mustPayBy: "", remainingBefore: "", contribution: "", ...(form.data.mortgage || {}) };
     form.data.housingPaymentType ||= "mortgage";
     form.data.calculatorHistory ||= [];
+    form.data.calculatorDraft ||= "";
+    form.data.calculatorJustEvaluated ||= false;
     form.data.allocations ||= [];
     form.data.variableSpending ||= [];
     form.data.savings ||= { goal: "", current: "", contribution: "" };
@@ -515,6 +518,7 @@ function syncDraftFormsWithFinancialProfile(account) {
 
 function saveFinancialProfileMutation(account) {
   syncDraftFormsWithFinancialProfile(account);
+  notifyProfileMilestones(account);
   saveState();
 }
 
@@ -606,6 +610,7 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
         ? clone(inventory.studentLoans).map((loan) => ({ ...blankStudentLoan(), ...loan, contribution: loan.paymentDue || "" }))
         : [],
       calculatorHistory: [],
+      calculatorDraft: "",
       allocations: [],
       notes: "",
     },
@@ -622,6 +627,7 @@ function loadState() {
       coachInvites: [],
       withdrawals: [],
       sessions: [],
+      notifications: [],
       dateAutofillDisabled: true,
       sessionEmail: null,
     };
@@ -633,6 +639,7 @@ function loadState() {
       stored.coachInvites ||= [];
       stored.withdrawals ||= [];
       stored.sessions ||= [];
+      stored.notifications ||= [];
       Object.values(stored.accounts).forEach((account) => {
         account.password ||= account.email?.endsWith("@fitdemo.com") ? "demo123" : "";
         if (!Object.hasOwn(account, "verified")) account.verified = true;
@@ -928,6 +935,7 @@ function seedState() {
     coachInvites: [],
     withdrawals: [],
     sessions: [],
+    notifications: [],
     sessionEmail: null,
   };
 }
@@ -972,7 +980,13 @@ async function saveFinancialProfileNow() {
     account.profile.spousePayFrequency = account.profile.maritalStatus === "married" ? String(data.get("spousePayFrequency") || "") : "";
     account.profileCompleted = profileIsComplete(account);
   }
-  if (account) syncDraftFormsWithFinancialProfile(account);
+  if (account) {
+    syncDraftFormsWithFinancialProfile(account);
+    notifyProfileMilestones(account);
+    Object.values(appState.forms)
+      .filter((form) => form.ownerEmail === account.email)
+      .forEach(notifyFormMilestones);
+  }
   if (!saveState()) return;
   try {
     await productionBackend.saveNow?.(appState);
@@ -1011,6 +1025,7 @@ function clearProtectedPortalMemory() {
     coachInvites: [],
     withdrawals: [],
     sessions: [],
+    notifications: [],
     dateAutofillDisabled: true,
     sessionEmail: null,
   };
@@ -1347,15 +1362,17 @@ function calculate(form) {
     (sum, item) => sum + (Number(item.budgeted) || 0),
     0,
   ));
-  const totalBills = currencyValue(
+  const plannedBeforeBudget = currencyValue(
     fixedBills +
     creditCards +
     debtContributions +
     studentLoanContributions +
     mortgageContribution +
-    savingsContribution +
-    variableBudget,
+    savingsContribution,
   );
+  const remainingBeforeAllocations = currencyValue(totalIncome - tithe - plannedBeforeBudget);
+  const remainingBeforeBudget = currencyValue(remainingBeforeAllocations - allocationTotal);
+  const totalBills = currencyValue(plannedBeforeBudget + variableBudget);
   const totalPlanned = currencyValue(totalBills + allocationTotal);
   const available = currencyValue(totalIncome - tithe - totalPlanned);
   const savingsGoal = Number(data.savings.goal) || 0;
@@ -1379,6 +1396,9 @@ function calculate(form) {
     studentLoanContributions,
     mortgageContribution,
     savingsContribution,
+    plannedBeforeBudget,
+    remainingBeforeAllocations,
+    remainingBeforeBudget,
     totalBills,
     totalPlanned,
     allocationTotal,
@@ -1392,6 +1412,112 @@ function calculate(form) {
     savingsProgress,
     approvedBills,
   };
+}
+
+function visibleNotifications(account) {
+  return (appState.notifications || [])
+    .filter((notification) => {
+      if (normalizeEmail(notification.recipientEmail) !== normalizeEmail(account.email)) return false;
+      if (account.role !== "coach") return true;
+      const member = appState.accounts[notification.memberEmail];
+      return (
+        member?.coachEmail === account.email &&
+        member?.coachRequestStatus === "approved"
+      );
+    })
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function addMilestoneNotifications(member, milestoneKey, title, message, type) {
+  appState.notifications ||= [];
+  if (
+    appState.notifications.some(
+      (notification) =>
+        notification.milestoneKey === milestoneKey &&
+        notification.memberEmail === member.email,
+    )
+  ) {
+    return false;
+  }
+  const recipients = [member.email];
+  if (member.coachEmail && member.coachRequestStatus === "approved") {
+    recipients.push(member.coachEmail);
+  }
+  recipients.forEach((recipientEmail) => {
+    appState.notifications.push({
+      id: uid("notification"),
+      milestoneKey,
+      memberEmail: member.email,
+      recipientEmail,
+      type,
+      title,
+      message,
+      createdAt: new Date().toISOString(),
+      readAt: null,
+    });
+  });
+  return true;
+}
+
+function notifyFormMilestones(form) {
+  const member = appState.accounts[form.ownerEmail];
+  if (!member) return false;
+  const calc = calculate(form);
+  let created = false;
+  if (calc.savingsGoal > 0 && calc.savingsAfter >= calc.savingsGoal) {
+    created =
+      addMilestoneNotifications(
+        member,
+        `${form.id}:savings-goal:${currencyValue(calc.savingsGoal)}`,
+        "Savings goal reached",
+        `${form.assignedName || member.name} reached the ${money(calc.savingsGoal)} savings goal.`,
+        "savings_goal",
+      ) || created;
+  }
+  form.data.creditCards.forEach((card) => {
+    const totalBalance = Number(card.totalBalance) || 0;
+    const remaining = currencyValue(totalBalance - (Number(card.contribution) || 0));
+    if (card.account && totalBalance > 0 && remaining <= 0) {
+      created =
+        addMilestoneNotifications(
+          member,
+          `${form.id}:card-paid:${card.id}:${currencyValue(totalBalance)}`,
+          "Credit card paid off",
+          `${form.assignedName || member.name} paid off ${card.account}.`,
+          "card_paid",
+        ) || created;
+    }
+  });
+  return created;
+}
+
+function notifyProfileMilestones(member) {
+  let created = false;
+  const savingsGoal = Number(member.carryForward?.savings?.goal) || 0;
+  const savingsTotal = profileSavingsTotal(member);
+  if (savingsGoal > 0 && savingsTotal >= savingsGoal) {
+    created =
+      addMilestoneNotifications(
+        member,
+        `profile-savings-goal:${currencyValue(savingsGoal)}`,
+        "Savings goal reached",
+        `${member.name} reached the ${money(savingsGoal)} savings goal.`,
+        "savings_goal",
+      ) || created;
+  }
+  member.financialInventory.creditCards.forEach((card) => {
+    if (card.account && card.totalBalance !== "" && Number(card.totalBalance) <= 0) {
+      created =
+        addMilestoneNotifications(
+          member,
+          `profile-card-paid:${card.id}`,
+          "Credit card paid off",
+          `${member.name} paid off ${card.account}.`,
+          "card_paid",
+        ) || created;
+    }
+  });
+  return created;
 }
 
 function render() {
@@ -1719,7 +1845,12 @@ function renderProfile() {
         <div class="page-heading"><div><p class="eyebrow">Coach profile</p><h2>Your F.I.T. coaching profile</h2><p>Complete your profile and manage the member information shared with you.</p></div></div>
         <section class="profile-layout">
           ${personalProfilePanel(account)}
-          ${profilePhotoPanel(account, true)}
+          <aside class="profile-summary-stack">
+            <div class="profile-photo-row">${profilePhotoPanel(account, true)}</div>
+            ${metric("Active mentees", mentees.length)}
+            ${metric("Pending requests", appState.coachRequests.filter((request) => request.coachEmail === account.email && request.status === "pending").length)}
+            ${metric("Completed sessions", appState.sessions.filter((session) => session.coachEmail === account.email).length)}
+          </aside>
         </section>
         <section class="dashboard-band">
           <div class="page-heading"><div><h2>Mentee financial profiles</h2><p>Only accepted, active mentees appear here.</p></div></div>
@@ -2595,7 +2726,6 @@ function sessionReviewCard(session, viewer) {
         ${sessionListDetail("Future Bills / Waiting for Next Check", session.futureBills || session.billsLeft)}
         ${sessionListDetail("Remaining funds allocations", session.allocations)}
         ${sessionListDetail("Savings withdrawals", session.savingsWithdrawals)}
-        ${sessionListDetail("Calculator summary", session.calculatorSummary)}
         ${sessionDetail("Member notes", session.memberNotes || "N/A")}
       </div>
       <section class="feedback-thread">
@@ -2678,9 +2808,6 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
   const savingsWithdrawals = appState.withdrawals
     .filter((item) => item.formId === form.id)
     .map((item) => `${item.savingsAccountName || "Savings"}: ${money(item.amount)} - ${item.reason}`);
-  const calculatorSummary = (form.data.calculatorHistory || [])
-    .slice(-5)
-    .map((item) => `${item.expression} = ${currencyValue(item.result).toFixed(2)}`);
   const normalizedCoachNotes = coachNotes || "N/A";
   const normalizedActionSteps = actionSteps || "N/A";
   const memberNotes = form.data.notes || "N/A";
@@ -2702,7 +2829,6 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
     futureBills: left,
     allocations,
     savingsWithdrawals,
-    calculatorSummary,
     memberNotes,
     aiSummary,
     feedback: [],
@@ -2712,6 +2838,8 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
 function renderDashboard() {
   const account = currentAccount();
   const isCoach = account.role === "coach";
+  const notifications = visibleNotifications(account);
+  const unreadNotifications = notifications.filter((notification) => !notification.readAt);
   activeView = "dashboard";
 
   if (isCoach) {
@@ -2744,7 +2872,9 @@ function renderDashboard() {
           ${metric("Mentees", mentees.length)}
           ${metric("Documents to review", reviewForms.length)}
           ${metric("Mentee requests", pendingRequests.length)}
+          ${metric("Milestone alerts", unreadNotifications.length)}
         </section>
+        ${notificationCenter(account, notifications)}
         ${coachQuickOverview(mentees, sharedForms, withdrawals)}
         <div class="page-heading">
           <div>
@@ -2780,7 +2910,6 @@ function renderDashboard() {
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   const latest = forms[0];
   const latestCalc = latest ? calculate(latest) : null;
-  const completedSessions = appState.sessions.filter((session) => session.memberEmail === account.email);
   const content = `
     <div class="content">
       ${dashboardBanner(account, false)}
@@ -2788,8 +2917,9 @@ function renderDashboard() {
         ${metric("Saved forms", forms.length)}
         ${metric("Latest paycheck", latestCalc ? money(latestCalc.thisCheck) : "$0")}
         ${metric("Latest total debt", money(profileDebtTotal(account)))}
-        ${metric("Completed sessions", completedSessions.length)}
+        ${metric("Milestone alerts", unreadNotifications.length)}
       </section>
+      ${notificationCenter(account, notifications)}
       <div class="page-heading">
         <div>
           <h2>Form history</h2>
@@ -2954,6 +3084,28 @@ function withdrawalCard(withdrawal) {
   `;
 }
 
+function notificationCenter(account, notifications = visibleNotifications(account)) {
+  const recent = notifications.slice(0, 5);
+  if (!recent.length) return "";
+  return `
+    <section class="panel milestone-center">
+      <div class="panel-heading">
+        <div><h3>Milestones</h3><p>Savings goals and paid-off cards shared with the right F.I.T. team.</p></div>
+        <span class="badge green">${notifications.filter((notification) => !notification.readAt).length} new</span>
+      </div>
+      <div class="milestone-list">
+        ${recent.map((notification) => `
+          <article class="milestone-notification ${notification.readAt ? "" : "unread"}">
+            <span class="milestone-icon" aria-hidden="true">${notification.type === "card_paid" ? "✓" : "★"}</span>
+            <div><strong>${escapeHtml(notification.title)}</strong><p>${escapeHtml(notification.message)}</p><small>${updatedLabel(notification.createdAt)}</small></div>
+            ${notification.readAt ? `<span class="badge green">Seen</span>` : `<button class="btn btn-secondary btn-small" type="button" data-read-notification="${notification.id}">Mark seen</button>`}
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function emptyState(symbol, title, description, action) {
   return `
     <section class="empty-state">
@@ -3015,11 +3167,11 @@ function renderEditor() {
           ${form.data.housingPaymentType === "mortgage" ? mortgagePanel(form, calc, readOnly) : ""}
           ${billsPanel(form, calc, readOnly, isCoachReview)}
           ${creditCardPanel(form, calc, readOnly, isCoachReview)}
-          ${variablePanel(form, calc, readOnly)}
           ${savingsPanel(form, calc, readOnly)}
           ${debtPanel(form, calc, readOnly)}
           ${studentLoanPanel(form, calc, readOnly)}
           ${allocationPanel(form, calc, readOnly)}
+          ${variablePanel(form, calc, readOnly)}
           ${notesPanel(form, readOnly)}
         </div>
         <aside class="editor-aside">
@@ -3032,10 +3184,11 @@ function renderEditor() {
               <a href="#bills">Fixed bills</a>
               <a href="#mortgage">Mortgage / rent</a>
               <a href="#cards">Credit cards</a>
-              <a href="#spending">Budgeting</a>
               <a href="#savings">Savings</a>
               <a href="#debt">Debt</a>
               <a href="#student-loans">Student loans</a>
+              <a href="#allocations">Remaining funds allocation</a>
+              <a href="#spending">Budgeting</a>
               <a href="#notes">Notes</a>
             </nav>
           </div>
@@ -3215,11 +3368,17 @@ function creditCardCard(row, index, readOnly, isCoachReview) {
 }
 
 function variablePanel(form, calc, readOnly) {
+  const overBudget = calc.available < 0;
   return `
-    <section class="panel" id="spending">
+    <section class="panel final-budget-panel ${overBudget ? "over-budget" : ""}" id="spending">
       <div class="panel-heading">
-        <div><h3>Budgeting</h3><p>Plan the flexible spending categories for this check period</p></div>
+        <div><p class="eyebrow">Final step</p><h3>Budget remaining funds</h3><p>Use only what remains after bills, contributions, and allocations.</p></div>
         ${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="variableSpending"><span aria-hidden="true">＋</span> Add category</button>`}
+      </div>
+      <div class="budget-remaining-strip">
+        ${computedField("Remaining funds available to budget", money(calc.remainingBeforeBudget), "remaining-before-budget")}
+        ${computedField("Budgeted from remaining funds", money(calc.variableBudget), "variable-budget")}
+        ${computedField(overBudget ? "Amount over remaining funds" : "Remaining after budget", money(Math.abs(calc.available)), "available")}
       </div>
       <div class="data-table-wrap">
         <table class="data-table">
@@ -3235,7 +3394,7 @@ function variablePanel(form, calc, readOnly) {
           </tbody>
         </table>
       </div>
-      <div class="table-total"><span>Total budgeted</span><strong>${money(calc.variableBudget)}</strong></div>
+      <div class="table-total"><span>${overBudget ? "Reduce the budget to stay within remaining funds" : "Remaining after final budget"}</span><strong>${money(calc.available)}</strong></div>
     </section>
   `;
 }
@@ -3335,7 +3494,87 @@ function allocationPanel(form, calc, readOnly) {
 
 function calculatorPanel(form, readOnly) {
   const history = (form.data.calculatorHistory || []).slice(-5).reverse();
-  return `<div class="summary-panel calculator-widget"><h3>Live calculator</h3><form data-calculator-form="${form.id}" class="calculator-form"><input class="input" name="expression" placeholder="Example: 1250 - 425" ${readOnly ? "disabled" : ""}><button class="btn btn-primary btn-small" type="submit" ${readOnly ? "disabled" : ""}>=</button></form><div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(currencyValue(item.result).toFixed(2))}</strong></div>`).join("") : `<p class="quiet-message">No calculations yet.</p>`}</div></div>`;
+  const keys = [
+    ["AC", "utility"], ["+/-", "utility"], ["%", "utility"], ["÷", "operator"],
+    ["7", "number"], ["8", "number"], ["9", "number"], ["×", "operator"],
+    ["4", "number"], ["5", "number"], ["6", "number"], ["−", "operator"],
+    ["1", "number"], ["2", "number"], ["3", "number"], ["+", "operator"],
+    ["0", "number wide"], [".", "number"], ["=", "operator"],
+  ];
+  return `<div class="summary-panel calculator-widget">
+    <div class="calculator-heading"><div><h3>Live calculator</h3><p>Shared inside this worksheet</p></div><span class="badge">${history.length}/5</span></div>
+    <output class="calculator-display" aria-live="polite">${escapeHtml(form.data.calculatorDraft || "0")}</output>
+    <div class="calculator-keypad" aria-label="Calculator keypad">
+      ${keys.map(([key, kind]) => `<button class="calculator-key ${kind}" type="button" data-calculator-key="${escapeHtml(key)}" data-calculator-form-id="${form.id}" ${readOnly ? "disabled" : ""}>${escapeHtml(key)}</button>`).join("")}
+    </div>
+    <div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(currencyValue(item.result).toFixed(2))}</strong></div>`).join("") : `<p class="calculator-empty">Recent calculations appear here.</p>`}</div>
+  </div>`;
+}
+
+function evaluateCalculatorExpression(expression) {
+  const normalized = String(expression || "")
+    .replaceAll("×", "*")
+    .replaceAll("÷", "/")
+    .replaceAll("−", "-")
+    .replace(/[+\-*/.\s]+$/, "");
+  if (!normalized || !/^[\d\s()+\-*/.]+$/.test(normalized)) throw new Error("Invalid expression");
+  const result = Function(`"use strict"; return (${normalized})`)();
+  if (!Number.isFinite(result)) throw new Error("Invalid result");
+  return currencyValue(result);
+}
+
+function applyCalculatorKey(form, key) {
+  let draft = String(form.data.calculatorDraft || "");
+  const isDigit = /^\d$/.test(key);
+  if (key === "AC") {
+    form.data.calculatorDraft = "";
+    form.data.calculatorJustEvaluated = false;
+    return false;
+  }
+  if (key === "=") {
+    const result = evaluateCalculatorExpression(draft);
+    form.data.calculatorHistory ||= [];
+    form.data.calculatorHistory.push({
+      id: uid("calculation"),
+      expression: draft,
+      result,
+      createdAt: new Date().toISOString(),
+      authorEmail: currentAccount().email,
+    });
+    form.data.calculatorHistory = form.data.calculatorHistory.slice(-5);
+    form.data.calculatorDraft = String(result);
+    form.data.calculatorJustEvaluated = true;
+    return true;
+  }
+  if (isDigit || key === ".") {
+    if (form.data.calculatorJustEvaluated) draft = "";
+    const currentNumber = draft.split(/[+×÷−]/).at(-1) || "";
+    if (key === "." && currentNumber.includes(".")) return false;
+    draft += key;
+    form.data.calculatorJustEvaluated = false;
+  } else if (["+", "−", "×", "÷"].includes(key)) {
+    if (!draft) {
+      if (key === "−") draft = "−";
+      else return false;
+    } else if (/[+−×÷]$/.test(draft)) {
+      draft = `${draft.slice(0, -1)}${key}`;
+    } else {
+      draft += key;
+    }
+    form.data.calculatorJustEvaluated = false;
+  } else if (key === "+/-") {
+    const match = draft.match(/(-?\d*\.?\d+)$/);
+    if (!match) return false;
+    const value = match[1].startsWith("-") ? match[1].slice(1) : `-${match[1]}`;
+    draft = `${draft.slice(0, -match[1].length)}${value}`;
+  } else if (key === "%") {
+    const match = draft.match(/(-?\d*\.?\d+)$/);
+    if (!match) return false;
+    const value = currencyValue(Number(match[1]) / 100);
+    draft = `${draft.slice(0, -match[1].length)}${value}`;
+  }
+  form.data.calculatorDraft = draft.slice(0, 32);
+  return false;
 }
 
 function notesPanel(form, readOnly) {
@@ -3365,11 +3604,12 @@ function summaryPanel(calc) {
         ${summaryRow("Student loan contributions", money(calc.studentLoanContributions))}
         ${summaryRow("Mortgage contribution", money(calc.mortgageContribution))}
         ${summaryRow("Savings contribution", money(calc.savingsContribution))}
-        ${summaryRow("Budgeting", money(calc.variableBudget))}
-        ${summaryRow("Total planned outflow", money(calc.totalBills))}
         ${summaryRow("Remaining funds allocations", money(calc.allocationTotal))}
+        ${summaryRow("Remaining before budget", money(calc.remainingBeforeBudget))}
+        ${summaryRow("Budgeted from remaining funds", money(calc.variableBudget))}
+        ${summaryRow("Total planned outflow", money(calc.totalPlanned))}
         ${calc.approvedBills ? summaryRow("Coach selected this check", money(calc.approvedBills)) : ""}
-        ${summaryRow("Available after bills", money(calc.available), true, "available")}
+        ${summaryRow("Remaining after budget", money(calc.available), true, "available")}
       </div>
     </div>
   `;
@@ -3501,6 +3741,12 @@ function refreshLiveAvailable(form) {
   });
   document.querySelectorAll("[data-live-tithe]").forEach((element) => {
     element.textContent = titheMoney(calc.tithe);
+  });
+  document.querySelectorAll("[data-live-remaining-before-budget]").forEach((element) => {
+    element.textContent = money(calc.remainingBeforeBudget);
+  });
+  document.querySelectorAll("[data-live-variable-budget]").forEach((element) => {
+    element.textContent = money(calc.variableBudget);
   });
 }
 
@@ -3702,7 +3948,7 @@ function printWorksheetSummary(formId) {
       <div class="fact"><span>Additional income</span><strong>${money(calc.additionalIncome)}</strong></div>
       <div class="fact"><span>Total income</span><strong>${money(calc.totalIncome)}</strong></div>
       <div class="fact"><span>Tithe</span><strong>${titheMoney(calc.tithe)}</strong></div>
-      <div class="fact"><span>Planned outflow</span><strong>${money(calc.totalBills)}</strong></div>
+      <div class="fact"><span>Planned outflow</span><strong>${money(calc.totalPlanned)}</strong></div>
       <div class="fact"><span>Available after plan</span><strong>${money(calc.available)}</strong></div>
       <div class="fact"><span>Remaining debt</span><strong>${money(calc.totalDebt)}</strong></div>
     </div>
@@ -4005,6 +4251,37 @@ async function createAccount(name, email, password, role) {
 }
 
 document.addEventListener("click", async (event) => {
+  const calculatorKey = event.target.closest("[data-calculator-key]");
+  if (calculatorKey) {
+    const form = appState.forms[calculatorKey.dataset.calculatorFormId];
+    if (!form) return;
+    try {
+      const completed = applyCalculatorKey(form, calculatorKey.dataset.calculatorKey);
+      form.updatedAt = new Date().toISOString();
+      saveState();
+      renderEditor();
+      if (completed) showToast("Calculation saved to the recent list.");
+    } catch {
+      showToast("That calculation could not be completed.");
+    }
+    return;
+  }
+
+  const readNotification = event.target.closest("[data-read-notification]");
+  if (readNotification) {
+    const account = currentAccount();
+    const notification = (appState.notifications || []).find(
+      (item) =>
+        item.id === readNotification.dataset.readNotification &&
+        normalizeEmail(item.recipientEmail) === normalizeEmail(account.email),
+    );
+    if (!notification) return;
+    notification.readAt = new Date().toISOString();
+    saveState();
+    renderDashboard();
+    return;
+  }
+
   if (event.target.closest("[data-cancel-delete-verification]")) {
     history.replaceState({}, "", window.location.pathname);
     loginMode = "signin";
@@ -4042,6 +4319,7 @@ document.addEventListener("click", async (event) => {
   if (demoButton) {
     appState.sessionEmail = demoButton.dataset.demo;
     activeView = "dashboard";
+    lastUserActivityAt = Date.now();
     saveState();
     render();
     return;
@@ -4462,10 +4740,11 @@ document.addEventListener("click", async (event) => {
     const form = appState.forms[saveFormButton.dataset.saveForm];
     if (!form || form.ownerEmail !== currentAccount()?.email) return;
     form.updatedAt = new Date().toISOString();
+    const milestoneCreated = notifyFormMilestones(form);
     if (saveState()) {
       try {
         await productionBackend.saveNow?.(appState);
-        showToast("Form saved.");
+        showToast(milestoneCreated ? "Form saved and milestone alerts shared." : "Form saved.");
       } catch (error) {
         showToast(error.message || "Form could not be saved.");
       }
@@ -4532,30 +4811,6 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("submit", async (event) => {
-  const calculatorForm = event.target.closest("[data-calculator-form]");
-  if (calculatorForm) {
-    event.preventDefault();
-    const form = appState.forms[calculatorForm.dataset.calculatorForm];
-    const expression = String(new FormData(calculatorForm).get("expression") || "").trim();
-    if (!form || !/^[\d\s()+\-*/.]+$/.test(expression)) {
-      showToast("Use numbers and +, -, ×, or ÷ only.");
-      return;
-    }
-    try {
-      const result = Function(`"use strict"; return (${expression})`)();
-      if (!Number.isFinite(result)) throw new Error();
-      form.data.calculatorHistory ||= [];
-      form.data.calculatorHistory.push({ id: uid("calculation"), expression, result: Math.round(result * 100) / 100, createdAt: new Date().toISOString(), authorEmail: currentAccount().email });
-      form.data.calculatorHistory = form.data.calculatorHistory.slice(-5);
-      form.updatedAt = new Date().toISOString();
-      saveState();
-      renderEditor();
-    } catch {
-      showToast("That calculation could not be completed.");
-    }
-    return;
-  }
-
   if (event.target.id === "login-form") {
     event.preventDefault();
     const data = new FormData(event.target);
@@ -4643,6 +4898,7 @@ document.addEventListener("submit", async (event) => {
         coachInvites: [],
         withdrawals: [],
         sessions: [],
+        notifications: [],
         dateAutofillDisabled: true,
         sessionEmail: null,
       };
@@ -5239,8 +5495,10 @@ document.addEventListener("change", async (event) => {
     applyRecurringBillSuggestion(input, form);
   }
   form.updatedAt = new Date().toISOString();
+  const milestoneCreated = notifyFormMilestones(form);
   saveState();
   refreshLiveAvailable(form);
+  if (milestoneCreated) showToast("Milestone reached. You and your coach were notified.");
 });
 
 async function initializePortal() {
@@ -5259,6 +5517,7 @@ async function initializePortal() {
           coachInvites: [],
           withdrawals: [],
           sessions: [],
+          notifications: [],
           dateAutofillDisabled: true,
           sessionEmail: null,
         };
@@ -5315,6 +5574,7 @@ async function validateCurrentAccount() {
       coachInvites: [],
       withdrawals: [],
       sessions: [],
+      notifications: [],
       dateAutofillDisabled: true,
       sessionEmail: null,
     };
