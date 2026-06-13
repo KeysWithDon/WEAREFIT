@@ -28,7 +28,7 @@ const passwordResetFromUrl = urlParameters.get("passwordReset") === "1";
 const verifyDeleteAccountFromUrl = urlParameters.get("verifyDeleteAccount") === "1";
 const deleteVerificationEmail = normalizeEmail(urlParameters.get("email"));
 const deleteVerificationToken = String(urlParameters.get("token") || "");
-if (inviteCoachFromUrl) localStorage.setItem("fit-pending-coach-invite", normalizeEmail(inviteCoachFromUrl));
+if (inviteCoachFromUrl) sessionStorage.setItem("fit-pending-coach-invite", normalizeEmail(inviteCoachFromUrl));
 if (passwordResetFromUrl) loginMode = "reset";
 if (verifyDeleteAccountFromUrl) loginMode = "delete-verify";
 
@@ -584,6 +584,19 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
 }
 
 function loadState() {
+  if (productionBackend.enabled) {
+    localStorage.removeItem(STORAGE_KEY);
+    return {
+      accounts: {},
+      forms: {},
+      coachRequests: [],
+      coachInvites: [],
+      withdrawals: [],
+      sessions: [],
+      dateAutofillDisabled: true,
+      sessionEmail: null,
+    };
+  }
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (stored?.accounts && stored?.forms) {
@@ -892,6 +905,11 @@ function nowForSeed() {
 }
 
 function saveState() {
+  if (productionBackend.enabled) {
+    localStorage.removeItem(STORAGE_KEY);
+    productionBackend.queuePersist?.(appState);
+    return true;
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
     productionBackend.queuePersist?.(appState);
@@ -949,6 +967,24 @@ function currentAccount() {
   return appState.accounts[appState.sessionEmail] || null;
 }
 
+function clearProtectedPortalMemory() {
+  if (!productionBackend.enabled) {
+    appState.sessionEmail = null;
+    return;
+  }
+  appState = {
+    accounts: {},
+    forms: {},
+    coachRequests: [],
+    coachInvites: [],
+    withdrawals: [],
+    sessions: [],
+    dateAutofillDisabled: true,
+    sessionEmail: null,
+  };
+  localStorage.removeItem(STORAGE_KEY);
+}
+
 function activityStatus(account) {
   const lastActive = account?.lastActiveAt ? new Date(account.lastActiveAt).getTime() : 0;
   const elapsed = Date.now() - lastActive;
@@ -970,9 +1006,6 @@ function touchActivity() {
   if (now - lastPresenceUpdateAt < 30 * 1000) return;
   lastPresenceUpdateAt = now;
   account.lastActiveAt = new Date().toISOString();
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
-  } catch {}
   if (!productionBackend.config?.presenceEnabled) return;
   productionBackend.updatePresence?.(account.lastActiveAt).catch((error) => {
     console.warn("Could not update activity status", error);
@@ -1000,14 +1033,13 @@ async function logoutDueToInactivity() {
   } catch (error) {
     console.warn("Could not complete remote inactivity logout", error);
   }
-  appState.sessionEmail = null;
+  clearProtectedPortalMemory();
   activeView = "dashboard";
   activeFormId = null;
   pendingPaystubUpload = null;
   loginMode = "signin";
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
-  } catch {}
+  localStorage.removeItem(STORAGE_KEY);
+  history.replaceState({}, "", window.location.pathname);
   renderLogin();
   showToast("You were logged out due to inactivity.");
   inactivityLogoutInProgress = false;
@@ -1021,14 +1053,14 @@ function checkInactivityLogout() {
 
 async function completePendingCoachInvite() {
   if (!productionBackend.enabled) return;
-  const coachEmail = localStorage.getItem("fit-pending-coach-invite");
+  const coachEmail = sessionStorage.getItem("fit-pending-coach-invite");
   const member = currentAccount();
   if (!coachEmail || !member || member.role !== "user") return;
   const result = await productionBackend.connectCoach(coachEmail, true);
   member.coachEmail = result.coachEmail;
   member.coachName = result.coachName || "F.I.T. coach";
   member.coachRequestStatus = "approved";
-  localStorage.removeItem("fit-pending-coach-invite");
+  sessionStorage.removeItem("fit-pending-coach-invite");
   window.history.replaceState({}, "", window.location.pathname);
   saveState();
   showToast("Coach invitation accepted. You are now connected.");
@@ -2417,7 +2449,7 @@ function renderAbout() {
 function communityFooter() {
   return `
     <footer class="community-footer">
-      <div><strong>Connect with the ministry</strong><span>Stay connected with the God Cannot Lie Ministries church community.</span></div>
+      <div><strong>Your information is protected</strong><span>Financial records are saved securely and shared only with your approved coach.</span></div>
       <div class="footer-links">
         <button class="footer-privacy-link" type="button" data-view="settings">Privacy &amp; Security</button>
         <a class="btn btn-secondary btn-small" href="https://www.facebook.com/share/1D3VquSEb6/?mibextid=wwXIfr" target="_blank" rel="noopener noreferrer">Visit Our Church Facebook Page ↗</a>
@@ -2440,8 +2472,8 @@ function renderSettings() {
         </div>
       </section>
       <section class="panel danger-zone">
-        <div class="panel-heading"><div><h3>Delete account</h3><p>Delete your F.I.T. account and saved data.</p></div></div>
-        <div class="panel-body danger-zone-body"><p>We will email a secure confirmation link to <strong>${escapeHtml(account.email)}</strong>.${productionBackend.config?.accountDeletionEnabled ? "" : " This option is not available yet."}</p><button class="btn btn-danger" type="button" data-request-account-deletion ${productionBackend.config?.accountDeletionEnabled ? "" : "disabled"}>Delete account</button></div>
+        <div class="panel-heading"><div><h3>Delete account</h3><p>Permanently remove your account and saved information.</p></div></div>
+        <div class="panel-body danger-zone-body"><p>For your protection, we will email a confirmation link to <strong>${escapeHtml(account.email)}</strong>. Nothing is deleted until you open that link.${productionBackend.config?.accountDeletionEnabled ? "" : " This option is not available yet."}</p><button class="btn btn-danger" type="button" data-request-account-deletion ${productionBackend.config?.accountDeletionEnabled ? "" : "disabled"}>Start account deletion</button></div>
       </section>
     </div>
   `;
@@ -4346,11 +4378,12 @@ document.addEventListener("click", async (event) => {
         return;
       }
     }
-    appState.sessionEmail = null;
+    clearProtectedPortalMemory();
     activeView = "dashboard";
     activeFormId = null;
     pendingPaystubUpload = null;
     saveState();
+    history.replaceState({}, "", window.location.pathname);
     render();
     return;
   }
@@ -4566,7 +4599,7 @@ document.addEventListener("submit", async (event) => {
     try {
       await productionBackend.completeAccountDeletion(deleteVerificationEmail, deleteVerificationToken);
       localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem("fit-pending-coach-invite");
+      sessionStorage.removeItem("fit-pending-coach-invite");
       appState = {
         accounts: {},
         forms: {},
@@ -5176,6 +5209,7 @@ document.addEventListener("change", async (event) => {
 
 async function initializePortal() {
   if (productionBackend.enabled) {
+    localStorage.removeItem(STORAGE_KEY);
     try {
       const hydrated = await productionBackend.hydrate();
       if (hydrated) {
@@ -5221,7 +5255,7 @@ async function refreshPortalFromBackend() {
     const currentEmail = appState.sessionEmail;
     appState = normalizeStateModels(hydrated);
     appState.sessionEmail = currentEmail;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+    localStorage.removeItem(STORAGE_KEY);
     render();
   } catch (error) {
     console.warn("Could not refresh live portal data", error);
