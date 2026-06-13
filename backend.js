@@ -12,6 +12,7 @@
     : null;
   let accessibleStateRows = new Map();
   let saveTimer = null;
+  let realtimeChannel = null;
 
   function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
@@ -38,8 +39,12 @@
   function stateForOwner(state, ownerEmail) {
     const owner = state.accounts[ownerEmail];
     if (!owner) return null;
+    const connectedCoach = owner.coachEmail ? state.accounts[owner.coachEmail] : null;
     return {
-      accounts: { [ownerEmail]: cleanAccount(owner) },
+      accounts: {
+        [ownerEmail]: cleanAccount(owner),
+        ...(connectedCoach ? { [connectedCoach.email]: { name: connectedCoach.name, email: connectedCoach.email, role: "coach", profilePhoto: connectedCoach.profilePhoto || null, lastActiveAt: connectedCoach.lastActiveAt || null } } : {}),
+      },
       forms: Object.fromEntries(
         Object.entries(state.forms).filter(([, form]) => form.ownerEmail === ownerEmail),
       ),
@@ -325,6 +330,23 @@
     return data;
   }
 
+  async function removeMentee(memberEmail) {
+    const { data, error } = await client.functions.invoke("remove-mentee", {
+      body: { memberEmail: normalizeEmail(memberEmail) },
+    });
+    await throwFunctionError(error, "The mentee relationship could not be removed.");
+    return data;
+  }
+
+  async function subscribeToPortalChanges(onChange) {
+    if (!client) return;
+    if (realtimeChannel) await client.removeChannel(realtimeChannel);
+    realtimeChannel = client
+      .channel("fit-portal-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "portal_states" }, () => onChange())
+      .subscribe();
+  }
+
   async function requestAccountDeletion() {
     const { data, error } = await client.functions.invoke("request-account-deletion");
     await throwFunctionError(error, "Deletion verification email could not be sent.");
@@ -411,6 +433,8 @@
     signOut,
     sendCoachInvite,
     connectCoach,
+    removeMentee,
+    subscribeToPortalChanges,
     requestAccountDeletion,
     completeAccountDeletion,
     resendAccountDeletion,
