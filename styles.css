@@ -3761,3 +3761,245 @@ html[data-theme="dark"] .onboarding-banner strong {
     flex-direction: column;
   }
 }
+
+/* Worksheet symmetry, direct debt routing, and floating calculator */
+.debt-entry-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.debt-entry-grid .field {
+  display: grid;
+  align-content: end;
+  gap: 6px;
+}
+
+.debt-entry-grid .field label {
+  display: flex;
+  min-height: 32px;
+  align-items: end;
+  line-height: 1.25;
+}
+
+.debt-entry-grid .input,
+.debt-entry-grid .field select {
+  min-width: 0;
+  width: 100%;
+}
+
+.bill-selector-button {
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: auto;
+  min-height: 0;
+}
+
+.bill-selector-wrap .table-input {
+  min-height: 42px;
+}
+
+.routing-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.routing-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(170px, 0.65fr) 42px;
+  align-items: end;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.routing-remove {
+  align-self: end;
+}
+
+.draggable-calculator {
+  position: fixed;
+  z-index: 45;
+  right: 20px;
+  bottom: 20px;
+  width: min(292px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  border: 1px solid rgba(239, 195, 83, 0.65);
+  border-radius: 18px;
+  background: #171719;
+  color: #ffffff;
+  padding: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.36);
+  touch-action: none;
+}
+
+.draggable-calculator.dragging {
+  cursor: grabbing;
+  opacity: 0.94;
+  user-select: none;
+}
+
+.draggable-calculator .calculator-heading {
+  margin: -14px -14px 8px;
+  border-bottom: 1px solid #3f3f42;
+  padding: 12px 14px 10px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.calculator-drag-grip {
+  color: #d5d5d7;
+  font-size: 23px;
+  line-height: 1;
+}
+
+.draggable-calculator .calculator-key {
+  min-height: 52px;
+}
+
+.profile-overview {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.profile-overview .profile-photo-row {
+  grid-column: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.profile-overview .profile-photo-panel {
+  width: min(100%, 260px);
+  min-height: 100%;
+  margin: 0;
+  box-shadow: none;
+}
+
+.profile-overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.profile-overview-metrics .metric {
+  min-height: 100%;
+  box-shadow: none;
+}
+
+.profile-details-panel {
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.profile-details-summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.profile-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.profile-details-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-details-chevron {
+  color: var(--navy);
+  font-size: 22px;
+  font-weight: 800;
+  transition: transform 0.18s ease;
+}
+
+.profile-details-panel[open] .profile-details-chevron {
+  transform: rotate(180deg);
+}
+
+.assignment-choice > span {
+  grid-template-columns: 76px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.assignment-choice .joint-avatar-stack {
+  width: 72px;
+  min-width: 72px;
+  justify-content: center;
+}
+
+.assignment-choice strong,
+.assignment-choice small {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 840px) {
+  .debt-entry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .routing-row {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 0.65fr) 42px;
+  }
+}
+
+@media (max-width: 620px) {
+  .debt-entry-grid,
+  .routing-row,
+  .profile-overview-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .debt-entry-grid .field label {
+    min-height: 0;
+  }
+
+  .routing-remove {
+    width: 100%;
+  }
+
+  .draggable-calculator {
+    right: 12px;
+    bottom: 12px;
+    width: min(268px, calc(100vw - 24px));
+  }
+
+  .draggable-calculator .calculator-key {
+    min-height: 46px;
+  }
+
+  .profile-overview .profile-photo-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .profile-overview .profile-photo-panel {
+    width: 100%;
+    min-width: 0;
+    padding: 12px 8px;
+  }
+
+  .profile-overview .profile-photo-panel .btn {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: normal;
+  }
+
+  .profile-details-summary {
+    align-items: center;
+    flex-direction: row;
+  }
+}
