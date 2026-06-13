@@ -21,6 +21,7 @@ let formAutosaveTimer = null;
 let lastUserActivityAt = Date.now();
 let lastPresenceUpdateAt = 0;
 let inactivityLogoutInProgress = false;
+let calculatorDragState = null;
 const INACTIVITY_LIMIT_MS = 15 * 60 * 1000;
 const urlParameters = new URLSearchParams(window.location.search);
 const inviteCoachFromUrl = urlParameters.get("coachInvite");
@@ -322,7 +323,10 @@ function normalizeStateModels(state) {
     form.data.calculatorHistory ||= [];
     form.data.calculatorDraft ||= "";
     form.data.calculatorJustEvaluated ||= false;
-    form.data.allocations ||= [];
+    form.data.calculatorPosition ||= null;
+    form.data.allocations = (form.data.allocations || []).filter((item) =>
+      ["debt", "credit_card", "student_loan"].includes(item.type),
+    );
     form.data.variableSpending ||= [];
     form.data.savings ||= { goal: "", current: "", contribution: "" };
     form.data.overview ||= { checkDate: "", thisCheck: "", additionalIncome: "" };
@@ -611,6 +615,7 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
         : [],
       calculatorHistory: [],
       calculatorDraft: "",
+      calculatorPosition: null,
       allocations: [],
       notes: "",
     },
@@ -1356,7 +1361,7 @@ function calculate(form) {
       (data.housingPaymentType === "mortgage" ? Number(data.mortgage.contribution) || 0 : 0),
   ));
   const allocationTotal = currencyValue((data.allocations || [])
-    .filter((item) => item.type !== "mortgage" || data.housingPaymentType === "mortgage")
+    .filter((item) => ["debt", "credit_card", "student_loan"].includes(item.type))
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
   const variableBudget = currencyValue(data.variableSpending.reduce(
     (sum, item) => sum + (Number(item.budgeted) || 0),
@@ -1843,15 +1848,15 @@ function renderProfile() {
     const content = `
       <div class="content">
         <div class="page-heading"><div><p class="eyebrow">Coach profile</p><h2>Your F.I.T. coaching profile</h2><p>Complete your profile and manage the member information shared with you.</p></div></div>
-        <section class="profile-layout">
-          ${personalProfilePanel(account)}
-          <aside class="profile-summary-stack">
-            <div class="profile-photo-row">${profilePhotoPanel(account, true)}</div>
+        <section class="profile-overview">
+          <div class="profile-photo-row">${profilePhotoPanel(account, true)}</div>
+          <div class="profile-overview-metrics">
             ${metric("Active mentees", mentees.length)}
             ${metric("Pending requests", appState.coachRequests.filter((request) => request.coachEmail === account.email && request.status === "pending").length)}
             ${metric("Completed sessions", appState.sessions.filter((session) => session.coachEmail === account.email).length)}
-          </aside>
+          </div>
         </section>
+        ${personalProfilePanel(account)}
         <section class="dashboard-band">
           <div class="page-heading"><div><h2>Mentee financial profiles</h2><p>Only accepted, active mentees appear here.</p></div></div>
           ${
@@ -1875,18 +1880,18 @@ function renderProfile() {
   const content = `
     <div class="content">
       <div class="page-heading"><div><p class="eyebrow">Your financial foundation</p><h2>My F.I.T. financial profile</h2><p>Profile data becomes the starting point for every new worksheet.</p></div><button class="btn btn-primary" type="button" data-save-financial-profile>Save profile data</button></div>
-      <section class="profile-layout">
-        ${personalProfilePanel(account)}
-        <aside class="profile-summary-stack">
-          <div class="profile-photo-row">
-            ${profilePhotoPanel(account, true)}
-            ${account.profile.maritalStatus === "married" ? spousePhotoPanel(account, true) : ""}
-          </div>
+      <section class="profile-overview">
+        <div class="profile-photo-row">
+          ${profilePhotoPanel(account, true)}
+          ${account.profile.maritalStatus === "married" ? spousePhotoPanel(account, true) : ""}
+        </div>
+        <div class="profile-overview-metrics">
           ${metric("Current savings", money(currentSavings))}
           ${metric("Tracked assets", money(assetTotal))}
           ${metric("Remaining debt", money(totalDebt))}
-        </aside>
+        </div>
       </section>
+      ${personalProfilePanel(account)}
       ${assetAccountsSection(account)}
       ${paystubVault(account, false)}
       ${mortgageProfileSection(account)}
@@ -1925,8 +1930,8 @@ function renderProfile() {
 function personalProfilePanel(account) {
   const isCoach = account.role === "coach";
   return `
-    <div class="panel">
-      <div class="panel-heading"><div><h3>Personal and household details</h3><p>${isCoach ? "Your name and phone number are required." : "Required details unlock worksheets and are visible to your assigned coach."}</p></div>${account.profileCompleted ? `<span class="badge green">Profile ready</span>` : `<span class="badge">Required</span>`}</div>
+    <details class="panel profile-details-panel" ${account.profileCompleted ? "" : "open"}>
+      <summary class="panel-heading profile-details-summary"><div><h3>Personal and household details</h3><p>${isCoach ? "Your name and phone number are required." : "Names, contact details, household information, and spouse details."}</p></div><div class="profile-details-status">${account.profileCompleted ? `<span class="badge green">Profile ready</span>` : `<span class="badge">Required</span>`}<span class="profile-details-chevron" aria-hidden="true">⌄</span></div></summary>
       <form id="profile-form" class="panel-body profile-form-grid">
         <div class="field"><label for="profile-name">Full name</label><input id="profile-name" class="input" name="name" value="${escapeHtml(account.name)}" required></div>
         <div class="field"><label>Email address</label><input class="input" value="${escapeHtml(account.email)}" disabled></div>
@@ -1963,7 +1968,7 @@ function personalProfilePanel(account) {
         }
         <button class="btn btn-primary profile-save" type="submit">Save financial profile</button>
       </form>
-    </div>
+    </details>
   `;
 }
 
@@ -2724,7 +2729,7 @@ function sessionReviewCard(session, viewer) {
         ${sessionDetail("Action steps before next session", session.actionSteps || "Continue following the approved worksheet.")}
         ${sessionListDetail("Bills to Pay This Check", session.billsToPayThisCheck || session.billsPaid)}
         ${sessionListDetail("Future Bills / Waiting for Next Check", session.futureBills || session.billsLeft)}
-        ${sessionListDetail("Remaining funds allocations", session.allocations)}
+        ${sessionListDetail("Funds routed to debts and cards", session.allocations)}
         ${sessionListDetail("Savings withdrawals", session.savingsWithdrawals)}
         ${sessionDetail("Member notes", session.memberNotes || "N/A")}
       </div>
@@ -2811,7 +2816,7 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
   const normalizedCoachNotes = coachNotes || "N/A";
   const normalizedActionSteps = actionSteps || "N/A";
   const memberNotes = form.data.notes || "N/A";
-  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. Total income for this check was ${money(calc.totalIncome)}, including ${money(calc.additionalIncome)} in additional income. The rounded tithe was ${titheMoney(calc.tithe)}, planned before bills and allocations. Bills to Pay This Check: ${paid.length ? paid.join("; ") : "none"}. Future Bills / Waiting for Next Check: ${left.length ? left.join("; ") : "none"}. Remaining funds allocations total ${money(calc.allocationTotal)}, leaving ${money(calc.available)} available. ${savingsWithdrawals.length ? `Savings withdrawals recorded: ${savingsWithdrawals.join("; ")}.` : "No savings withdrawals were recorded for this form."} Coach notes: ${normalizedCoachNotes}. Member notes: ${memberNotes}.`;
+  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. Total income for this check was ${money(calc.totalIncome)}, including ${money(calc.additionalIncome)} in additional income. The rounded tithe was ${titheMoney(calc.tithe)}, planned before bills and debt/card routing. Bills to Pay This Check: ${paid.length ? paid.join("; ") : "none"}. Future Bills / Waiting for Next Check: ${left.length ? left.join("; ") : "none"}. Funds routed to debts and cards total ${money(calc.allocationTotal)}, leaving ${money(calc.available)} available. ${savingsWithdrawals.length ? `Savings withdrawals recorded: ${savingsWithdrawals.join("; ")}.` : "No savings withdrawals were recorded for this form."} Coach notes: ${normalizedCoachNotes}. Member notes: ${memberNotes}.`;
   return {
     id: uid("session"),
     formId: form.id,
@@ -3176,7 +3181,6 @@ function renderEditor() {
         </div>
         <aside class="editor-aside">
           ${summaryPanel(calc)}
-          ${calculatorPanel(form, readOnly)}
           <div class="summary-panel">
             <h3>Jump to</h3>
             <nav class="section-links" aria-label="Worksheet sections">
@@ -3187,13 +3191,14 @@ function renderEditor() {
               <a href="#savings">Savings</a>
               <a href="#debt">Debt</a>
               <a href="#student-loans">Student loans</a>
-              <a href="#allocations">Remaining funds allocation</a>
+              <a href="#allocations">Route funds to debts and cards</a>
               <a href="#spending">Budgeting</a>
               <a href="#notes">Notes</a>
             </nav>
           </div>
         </aside>
       </div>
+      ${calculatorPanel(form, readOnly)}
     </div>
   `;
 
@@ -3326,7 +3331,7 @@ function creditCardCard(row, index, readOnly, isCoachReview) {
   const purchasePromo = row.promoType === "purchases" || row.promoType === "both";
   const balancePromo = row.promoType === "balance_transfers" || row.promoType === "both";
   return `
-    <article class="debt-entry">
+    <article class="debt-entry credit-card-entry">
       <div class="debt-entry-heading">
         <div><strong>${escapeHtml(row.account || "New credit card")}</strong><span class="entry-balance">${money(remaining)} remaining</span></div>
         ${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove card" aria-label="Remove card" data-remove-row="creditCards.${index}">×</button>`}
@@ -3372,7 +3377,7 @@ function variablePanel(form, calc, readOnly) {
   return `
     <section class="panel final-budget-panel ${overBudget ? "over-budget" : ""}" id="spending">
       <div class="panel-heading">
-        <div><p class="eyebrow">Final step</p><h3>Budget remaining funds</h3><p>Use only what remains after bills, contributions, and allocations.</p></div>
+        <div><p class="eyebrow">Final step</p><h3>Budget remaining funds</h3><p>Use only what remains after bills, contributions, and debt/card routing.</p></div>
         ${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="variableSpending"><span aria-hidden="true">＋</span> Add category</button>`}
       </div>
       <div class="budget-remaining-strip">
@@ -3438,7 +3443,7 @@ function debtPanel(form, calc, readOnly) {
 
 function debtCard(row, index, readOnly) {
   return `
-    <article class="debt-entry">
+    <article class="debt-entry debt-tracker-entry">
       <div class="debt-entry-heading">
         <strong>${escapeHtml(row.account || "New debt account")}</strong>
         ${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove debt" aria-label="Remove debt" data-remove-row="debts.${index}">×</button>`}
@@ -3478,7 +3483,7 @@ function studentLoanPanel(form, calc, readOnly) {
 }
 
 function studentLoanCard(loan, index, readOnly) {
-  return `<article class="debt-entry"><div class="debt-entry-heading"><strong>${escapeHtml(loan.account || "New student loan")}</strong>${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove student loan" aria-label="Remove student loan" data-remove-row="studentLoans.${index}">×</button>`}</div><div class="debt-entry-grid">
+  return `<article class="debt-entry student-loan-entry"><div class="debt-entry-heading"><strong>${escapeHtml(loan.account || "New student loan")}</strong>${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove student loan" aria-label="Remove student loan" data-remove-row="studentLoans.${index}">×</button>`}</div><div class="debt-entry-grid">
     ${textField("Loan name", `studentLoans.${index}.account`, loan.account, readOnly, "Student loan name")}
     ${moneyField("Balance", `studentLoans.${index}.totalOwed`, loan.totalOwed, readOnly)}
     ${percentField("Interest rate", `studentLoans.${index}.apr`, loan.apr, readOnly)}
@@ -3488,8 +3493,51 @@ function studentLoanCard(loan, index, readOnly) {
   </div></article>`;
 }
 
+function allocationTargetOptions(form, selectedType, selectedAccount) {
+  const groups = [
+    ["debt", "Debts", form.data.debts || []],
+    ["credit_card", "Credit cards", form.data.creditCards || []],
+    ["student_loan", "Student loans", form.data.studentLoans || []],
+  ];
+  const selectedValue = `${selectedType || ""}|${selectedAccount || ""}`;
+  return `<option value="">Select a debt or card</option>${groups
+    .map(([type, label, rows]) => {
+      const options = rows
+        .filter((row) => row.account)
+        .map((row) => {
+          const value = `${type}|${row.account}`;
+          return `<option value="${escapeHtml(value)}" ${value === selectedValue ? "selected" : ""}>${escapeHtml(row.account)}</option>`;
+        })
+        .join("");
+      return options ? `<optgroup label="${label}">${options}</optgroup>` : "";
+    })
+    .join("")}`;
+}
+
 function allocationPanel(form, calc, readOnly) {
-  return `<section class="panel" id="allocations"><div class="panel-heading"><div><h3>Remaining funds allocation</h3><p>Direct leftover funds after the paycheck plan.</p></div>${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="allocations"><span aria-hidden="true">＋</span> Add allocation</button>`}</div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Allocate to</th><th>Account or goal</th><th>Amount</th><th></th></tr></thead><tbody>${(form.data.allocations || []).map((row,index)=>`<tr><td><select class="table-input" data-path="allocations.${index}.type" ${readOnly?"disabled":""}>${["savings","debt","credit_card","student_loan",...(form.data.housingPaymentType==="mortgage"?["mortgage"]:[])].map(type=>selectOption(type,type.replaceAll("_"," "),row.type)).join("")}</select></td><td><input class="table-input" data-path="allocations.${index}.account" value="${escapeHtml(row.account||"")}" ${readOnly?"disabled":""}></td><td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step=".01" data-path="allocations.${index}.amount" value="${moneyInputValue(row.amount)}" ${readOnly?"disabled":""}></div></td><td>${readOnly?"":`<button class="icon-btn danger" type="button" data-remove-row="allocations.${index}">×</button>`}</td></tr>`).join("")}</tbody></table></div><div class="table-total"><span>Allocated from remaining funds</span><strong>${money(calc.allocationTotal)}</strong></div></section>`;
+  const rows = form.data.allocations || [];
+  return `
+    <section class="panel debt-routing-panel" id="allocations">
+      <div class="panel-heading">
+        <div><h3>Route extra funds to debts and cards</h3><p>Send available money to one or more debts, credit cards, or student loans.</p></div>
+        ${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="allocations"><span aria-hidden="true">＋</span> Route funds</button>`}
+      </div>
+      <div class="routing-list">
+        ${
+          rows.length
+            ? rows.map((row, index) => `
+              <article class="routing-row">
+                <div class="field"><label>Debt or card</label><select class="input" data-allocation-target="${index}" ${readOnly ? "disabled" : ""}>${allocationTargetOptions(form, row.type, row.account)}</select></div>
+                ${moneyField("Amount to route", `allocations.${index}.amount`, row.amount, readOnly)}
+                ${readOnly ? "" : `<button class="icon-btn danger routing-remove" type="button" aria-label="Remove routed funds" title="Remove routed funds" data-remove-row="allocations.${index}">×</button>`}
+              </article>
+            `).join("")
+            : emptyInline("No extra funds routed", "Use Route funds to direct available money to a debt or card.")
+        }
+      </div>
+      <div class="table-total"><span>Funds routed to debts and cards</span><strong data-live-allocation-total>${money(calc.allocationTotal)}</strong></div>
+    </section>
+  `;
 }
 
 function calculatorPanel(form, readOnly) {
@@ -3501,14 +3549,28 @@ function calculatorPanel(form, readOnly) {
     ["1", "number"], ["2", "number"], ["3", "number"], ["+", "operator"],
     ["0", "number wide"], [".", "number"], ["=", "operator"],
   ];
-  return `<div class="summary-panel calculator-widget">
-    <div class="calculator-heading"><div><h3>Live calculator</h3><p>Shared inside this worksheet</p></div><span class="badge">${history.length}/5</span></div>
+  const position = form.data.calculatorPosition;
+  const calculatorWidth = window.innerWidth <= 620
+    ? Math.min(268, window.innerWidth - 24)
+    : Math.min(292, window.innerWidth - 24);
+  const safeLeft = position
+    ? Math.min(Math.max(8, Number(position.left) || 8), Math.max(8, window.innerWidth - calculatorWidth - 8))
+    : 0;
+  const safeTop = position
+    ? Math.min(Math.max(8, Number(position.top) || 8), Math.max(8, window.innerHeight - 540))
+    : 0;
+  const positionStyle = position ? `left:${safeLeft}px;top:${safeTop}px;right:auto;bottom:auto;` : "";
+  return `<aside class="calculator-widget draggable-calculator" data-draggable-calculator="${form.id}" style="${positionStyle}">
+    <div class="calculator-heading" data-calculator-drag-handle>
+      <div><h3>Live calculator</h3><p>Drag to move</p></div>
+      <span class="calculator-drag-grip" aria-label="Drag calculator" title="Drag calculator">⠿</span>
+    </div>
     <output class="calculator-display" aria-live="polite">${escapeHtml(form.data.calculatorDraft || "0")}</output>
     <div class="calculator-keypad" aria-label="Calculator keypad">
       ${keys.map(([key, kind]) => `<button class="calculator-key ${kind}" type="button" data-calculator-key="${escapeHtml(key)}" data-calculator-form-id="${form.id}" ${readOnly ? "disabled" : ""}>${escapeHtml(key)}</button>`).join("")}
     </div>
     <div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(currencyValue(item.result).toFixed(2))}</strong></div>`).join("") : `<p class="calculator-empty">Recent calculations appear here.</p>`}</div>
-  </div>`;
+  </aside>`;
 }
 
 function evaluateCalculatorExpression(expression) {
@@ -3577,6 +3639,52 @@ function applyCalculatorKey(form, key) {
   return false;
 }
 
+function beginCalculatorDrag(event) {
+  const handle = event.target.closest("[data-calculator-drag-handle]");
+  const calculator = handle?.closest("[data-draggable-calculator]");
+  if (!calculator || event.button !== 0) return;
+  const rect = calculator.getBoundingClientRect();
+  calculator.style.left = `${rect.left}px`;
+  calculator.style.top = `${rect.top}px`;
+  calculator.style.right = "auto";
+  calculator.style.bottom = "auto";
+  calculator.classList.add("dragging");
+  calculatorDragState = {
+    calculator,
+    formId: calculator.dataset.draggableCalculator,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  };
+  event.preventDefault();
+}
+
+function moveCalculator(event) {
+  if (!calculatorDragState) return;
+  const { calculator, offsetX, offsetY } = calculatorDragState;
+  const maxLeft = Math.max(8, window.innerWidth - calculator.offsetWidth - 8);
+  const maxTop = Math.max(8, window.innerHeight - calculator.offsetHeight - 8);
+  const left = Math.min(maxLeft, Math.max(8, event.clientX - offsetX));
+  const top = Math.min(maxTop, Math.max(8, event.clientY - offsetY));
+  calculator.style.left = `${left}px`;
+  calculator.style.top = `${top}px`;
+}
+
+function endCalculatorDrag() {
+  if (!calculatorDragState) return;
+  const { calculator, formId } = calculatorDragState;
+  calculator.classList.remove("dragging");
+  const form = appState.forms[formId];
+  if (form) {
+    form.data.calculatorPosition = {
+      left: Math.round(Number.parseFloat(calculator.style.left) || 8),
+      top: Math.round(Number.parseFloat(calculator.style.top) || 8),
+    };
+    form.updatedAt = new Date().toISOString();
+    saveState();
+  }
+  calculatorDragState = null;
+}
+
 function notesPanel(form, readOnly) {
   return `
     <section class="panel" id="notes">
@@ -3604,7 +3712,7 @@ function summaryPanel(calc) {
         ${summaryRow("Student loan contributions", money(calc.studentLoanContributions))}
         ${summaryRow("Mortgage contribution", money(calc.mortgageContribution))}
         ${summaryRow("Savings contribution", money(calc.savingsContribution))}
-        ${summaryRow("Remaining funds allocations", money(calc.allocationTotal))}
+        ${summaryRow("Routed to debts and cards", money(calc.allocationTotal), false, "allocation-total")}
         ${summaryRow("Remaining before budget", money(calc.remainingBeforeBudget))}
         ${summaryRow("Budgeted from remaining funds", money(calc.variableBudget))}
         ${summaryRow("Total planned outflow", money(calc.totalPlanned))}
@@ -3747,6 +3855,9 @@ function refreshLiveAvailable(form) {
   });
   document.querySelectorAll("[data-live-variable-budget]").forEach((element) => {
     element.textContent = money(calc.variableBudget);
+  });
+  document.querySelectorAll("[data-live-allocation-total]").forEach((element) => {
+    element.textContent = money(calc.allocationTotal);
   });
 }
 
@@ -3953,7 +4064,7 @@ function printWorksheetSummary(formId) {
       <div class="fact"><span>Remaining debt</span><strong>${money(calc.totalDebt)}</strong></div>
     </div>
     <div class="two"><section class="section"><h2>Bills to Pay This Check</h2>${printList(billsPaid)}</section><section class="section"><h2>Future Bills / Waiting for Next Check</h2>${printList(billsRemaining)}</section></div>
-    <div class="two"><section class="section"><h2>Remaining funds allocations</h2>${printList(allocations)}</section><section class="section"><h2>Savings withdrawals</h2>${printList(savingsWithdrawals)}</section></div>
+    <div class="two"><section class="section"><h2>Funds routed to debts and cards</h2>${printList(allocations)}</section><section class="section"><h2>Savings withdrawals</h2>${printList(savingsWithdrawals)}</section></div>
     <h2>Savings and assets</h2><div class="grid">
       <div class="fact"><span>Worksheet savings</span><strong>${money(calc.savingsAfter)}</strong></div>
       <div class="fact"><span>Profile savings</span><strong>${money(profileSavingsTotal(member))}</strong></div>
@@ -4774,7 +4885,7 @@ document.addEventListener("click", async (event) => {
     if (path === "variableSpending") target.push(blankVariable());
     if (path === "debts") target.push(blankDebt());
     if (path === "studentLoans") target.push(blankStudentLoan());
-    if (path === "allocations") target.push({ id: uid("allocation"), type: "savings", account: "", amount: "" });
+    if (path === "allocations") target.push({ id: uid("allocation"), type: "", account: "", amount: "" });
     form.updatedAt = new Date().toISOString();
     saveState();
     renderEditor();
@@ -5464,6 +5575,20 @@ document.addEventListener("change", async (event) => {
     return;
   }
 
+  const allocationTarget = event.target.closest("[data-allocation-target]");
+  if (allocationTarget && activeFormId) {
+    const form = appState.forms[activeFormId];
+    const row = form.data.allocations[Number(allocationTarget.dataset.allocationTarget)];
+    if (!row) return;
+    const [type, ...accountParts] = allocationTarget.value.split("|");
+    row.type = type || "";
+    row.account = accountParts.join("|");
+    form.updatedAt = new Date().toISOString();
+    saveState();
+    refreshLiveAvailable(form);
+    return;
+  }
+
   const cardPromoType = event.target.closest("[data-card-promo-type]");
   if (cardPromoType && activeFormId) {
     const form = appState.forms[activeFormId];
@@ -5592,6 +5717,10 @@ async function validateCurrentAccount() {
 }
 
 initializePortal();
+document.addEventListener("pointerdown", beginCalculatorDrag);
+document.addEventListener("pointermove", moveCalculator);
+document.addEventListener("pointerup", endCalculatorDrag);
+document.addEventListener("pointercancel", endCalculatorDrag);
 setInterval(() => {
   checkInactivityLogout();
   validateCurrentAccount();
