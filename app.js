@@ -41,6 +41,19 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function usableDisplayName(value, email = "") {
+  const name = String(value || "").trim();
+  return name && normalizeEmail(name) !== normalizeEmail(email) && !validEmail(name) ? name : "";
+}
+
+function coachDisplayName(member, coach, fallback = "F.I.T. coach") {
+  return (
+    usableDisplayName(coach?.name, coach?.email || member?.coachEmail) ||
+    usableDisplayName(member?.coachName, member?.coachEmail) ||
+    fallback
+  );
+}
+
 function validEmail(value) {
   const email = normalizeEmail(value);
   const [localPart = "", domain = ""] = email.split("@");
@@ -2335,6 +2348,10 @@ function renderCoachConnection() {
   }
 
   const coach = account.coachEmail ? appState.accounts[account.coachEmail] : null;
+  const connectedCoachName = coachDisplayName(account, coach);
+  const coachAvatar = avatarMarkup(
+    coach ? { ...coach, name: connectedCoachName } : connectedCoachName,
+  );
   const invites = appState.coachInvites.filter(
     (invite) => invite.memberEmail === account.email && invite.status === "pending",
   );
@@ -2352,14 +2369,14 @@ function renderCoachConnection() {
         ${
           account.coachEmail && account.coachRequestStatus === "approved"
             ? `<div class="connection-current">
-                ${avatarMarkup(coach || account.coachName || account.coachEmail)}
-                <div><p class="eyebrow">Connected coach</p><h3>${escapeHtml(coach?.name || account.coachName || "F.I.T. coach")}</h3><p>${escapeHtml(account.coachEmail)}</p>${activityBadge(coach)}</div>
+                ${coachAvatar}
+                <div><p class="eyebrow">Connected coach</p><h3>${escapeHtml(connectedCoachName)}</h3><p>${escapeHtml(account.coachEmail)}</p>${activityBadge(coach)}</div>
                 <span class="badge green">Approved</span>
               </div>`
             : account.coachEmail
               ? `<div class="connection-current">
-                  ${avatarMarkup(coach || account.coachEmail)}
-                  <div><p class="eyebrow">Coach request</p><h3>${escapeHtml(coach?.name || account.coachName || "Pending coach")}</h3><p>${escapeHtml(account.coachEmail)}</p></div>
+                  ${coachAvatar}
+                  <div><p class="eyebrow">Coach request</p><h3>${escapeHtml(coachDisplayName(account, coach, "Pending coach"))}</h3><p>${escapeHtml(account.coachEmail)}</p></div>
                   <span class="badge">${escapeHtml(account.coachRequestStatus || "pending")}</span>
                 </div>`
               : `<div class="empty-connection"><h3>No coach designated</h3><p>Enter your coach's account email to send a connection request.</p></div>`
@@ -2411,7 +2428,8 @@ function inviteCard(invite) {
 
 function memberInviteCard(invite) {
   const coach = appState.accounts[invite.coachEmail];
-  return `<article class="request-card"><div class="person-row">${avatarMarkup(coach || invite.coachEmail)}<div><strong>${escapeHtml(coach?.name || invite.coachEmail)}</strong><span>Invited you to connect as a mentee</span></div></div><div class="button-row"><button class="btn btn-primary btn-small" type="button" data-invite-action="accepted" data-invite-id="${invite.id}">Accept</button><button class="btn btn-danger btn-small" type="button" data-invite-action="declined" data-invite-id="${invite.id}">Decline</button></div></article>`;
+  const coachName = coachDisplayName({ coachEmail: invite.coachEmail }, coach);
+  return `<article class="request-card"><div class="person-row">${avatarMarkup(coach ? { ...coach, name: coachName } : coachName)}<div><strong>${escapeHtml(coachName)}</strong><span>Invited you to connect as a mentee</span></div></div><div class="button-row"><button class="btn btn-primary btn-small" type="button" data-invite-action="accepted" data-invite-id="${invite.id}">Accept</button><button class="btn btn-danger btn-small" type="button" data-invite-action="declined" data-invite-id="${invite.id}">Decline</button></div></article>`;
 }
 
 function renderAbout() {
@@ -3589,6 +3607,7 @@ function showShareModal(formId) {
   if (!form) return;
   const account = currentAccount();
   const coach = account.coachEmail ? appState.accounts[account.coachEmail] : null;
+  const coachName = coachDisplayName(account, coach);
   const canSend = account.coachEmail && account.coachRequestStatus === "approved";
 
   const modal = document.createElement("div");
@@ -3605,7 +3624,7 @@ function showShareModal(formId) {
         ${
           canSend
             ? `<div class="share-person designated-coach">
-                <div><strong>${escapeHtml(coach?.name || account.coachName || "F.I.T. coach")}</strong><span>${escapeHtml(account.coachEmail)} · Designated coach</span></div>
+                <div><strong>${escapeHtml(coachName)}</strong><span>${escapeHtml(account.coachEmail)} · Designated coach</span></div>
                 <span class="badge green">Connected</span>
               </div>
               <form id="share-form" class="form-stack">
