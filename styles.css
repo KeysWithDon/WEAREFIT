@@ -4003,3 +4003,215 @@ html[data-theme="dark"] .onboarding-banner strong {
     flex-direction: row;
   }
 }
+
+/* Profile photo and calculator polish */
+.avatar,
+.joint-avatar-stack {
+  flex-shrink: 0;
+}
+
+.connection-current {
+  align-items: flex-start;
+}
+
+.connection-current .avatar {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  align-self: flex-start;
+  overflow: hidden;
+  font-size: 17px;
+}
+
+.connection-current .avatar-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-photo-panel {
+  grid-template-columns: auto minmax(0, 1fr);
+  place-items: center start;
+  width: min(100%, 235px);
+  min-height: 0;
+  gap: 10px;
+  border-color: rgba(217, 166, 46, 0.5);
+  border-radius: 999px;
+  padding: 10px 12px;
+  text-align: left;
+  box-shadow: 0 5px 16px rgba(7, 26, 58, 0.08);
+}
+
+.profile-photo-panel > div {
+  min-width: 0;
+}
+
+.profile-photo-panel strong {
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-photo-panel span {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.profile-photo-panel .avatar,
+.profile-overview .avatar-xl {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 58px;
+  border-width: 2px;
+  font-size: 18px;
+  box-shadow: 0 6px 16px rgba(7, 26, 58, 0.14);
+}
+
+.profile-photo-panel .profile-photo-button {
+  grid-column: 2;
+  justify-self: start;
+  min-height: 30px;
+  border-radius: 999px;
+  padding: 6px 11px;
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.profile-overview .profile-photo-row {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.profile-overview .profile-photo-panel {
+  width: min(100%, 230px);
+  min-height: 0;
+  margin-inline: 0;
+}
+
+.profile-overview-metrics {
+  width: 100%;
+  max-width: 860px;
+  margin-inline: auto;
+}
+
+.profile-details-summary {
+  gap: 12px;
+}
+
+.profile-details-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--navy);
+  padding: 4px 9px;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.profile-details-action::before {
+  content: "Open details";
+}
+
+.profile-details-panel[open] .profile-details-action::before {
+  content: "Hide details";
+}
+
+.draggable-calculator {
+  min-width: 236px;
+  min-height: 430px;
+  max-width: min(430px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  resize: both;
+}
+
+.calculator-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calculator-count {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: #2d2d30;
+  color: #ffffff;
+}
+
+.profile-heading-person > div,
+.person-row > div,
+.connection-current > div {
+  min-width: 0;
+}
+
+.profile-heading-person h3,
+.profile-heading-person p,
+.person-row h3,
+.person-row p,
+.person-row strong,
+.person-row span {
+  overflow-wrap: anywhere;
+}
+
+.profile-heading-person .joint-avatar-stack.avatar-lg {
+  width: 86px;
+  min-width: 86px;
+  flex: 0 0 86px;
+}
+
+.profile-heading-person .joint-avatar-stack.avatar-lg .avatar + .avatar {
+  margin-left: -10px;
+}
+
+@media (max-width: 620px) {
+  .profile-photo-panel,
+  .profile-overview .profile-photo-panel {
+    width: min(100%, 215px);
+    padding: 9px 10px;
+  }
+
+  .profile-photo-panel .avatar,
+  .profile-overview .avatar-xl {
+    width: 52px;
+    height: 52px;
+    flex-basis: 52px;
+    font-size: 16px;
+  }
+
+  .profile-photo-panel strong {
+    font-size: 12px;
+  }
+
+  .profile-photo-panel .profile-photo-button {
+    min-height: 28px;
+    padding: 5px 9px;
+    font-size: 10px;
+  }
+
+  .profile-overview .profile-photo-row {
+    justify-items: center;
+  }
+
+  .profile-details-action {
+    padding: 4px 7px;
+    font-size: 9px;
+  }
+
+  .draggable-calculator {
+    min-width: 224px;
+    min-height: 390px;
+    max-width: calc(100vw - 24px);
+  }
+}
