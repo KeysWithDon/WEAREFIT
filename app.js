@@ -1786,7 +1786,7 @@ function shell(content, options = {}) {
           </button>
           <button class="nav-btn ${activeView === "profile" ? "active" : ""}" type="button" data-view="profile">
             <span class="nav-glyph" aria-hidden="true">◉</span>
-            ${isCoach ? "Mentee profiles" : "Financial profile"}
+            Financial profile
           </button>
           <button class="nav-btn ${activeView === "sessions" ? "active" : ""}" type="button" data-view="sessions">
             <span class="nav-glyph" aria-hidden="true">✦</span>
@@ -1849,16 +1849,17 @@ function renderProfile() {
     );
     const content = `
       <div class="content">
-        <div class="page-heading"><div><p class="eyebrow">Coach profile</p><h2>Your F.I.T. coaching profile</h2><p>Complete your profile and manage the member information shared with you.</p></div></div>
+        <div class="page-heading"><div><p class="eyebrow">Coach financial profile</p><h2>My F.I.T. financial profile</h2><p>Your private finances are separate from every mentee profile.</p></div><button class="btn btn-primary" type="button" data-save-financial-profile>Save profile data</button></div>
         <section class="profile-overview">
           <div class="profile-photo-row">${profilePhotoPanel(account, true)}</div>
           <div class="profile-overview-metrics">
-            ${metric("Active mentees", mentees.length)}
-            ${metric("Pending requests", appState.coachRequests.filter((request) => request.coachEmail === account.email && request.status === "pending").length)}
-            ${metric("Completed sessions", appState.sessions.filter((session) => session.coachEmail === account.email).length)}
+            ${metric("Current savings", money(profileSavingsTotal(account)))}
+            ${metric("Tracked assets", money(profileInvestmentTotal(account)))}
+            ${metric("Remaining debt", money(profileDebtTotal(account)))}
           </div>
         </section>
         ${personalProfilePanel(account)}
+        ${financialProfileSections(account, true)}
         <section class="dashboard-band">
           <div class="page-heading"><div><h2>Mentee financial profiles</h2><p>Only accepted, active mentees appear here.</p></div></div>
           ${
@@ -1870,8 +1871,8 @@ function renderProfile() {
       </div>
     `;
     app.innerHTML = shell(content, {
-      title: "Coach profile",
-      subtitle: "Your identity and assigned mentee profiles",
+      title: "Financial profile",
+      subtitle: "Your private finances and assigned mentee profiles",
     });
     return;
   }
@@ -1894,39 +1895,45 @@ function renderProfile() {
         </div>
       </section>
       ${personalProfilePanel(account)}
-      ${assetAccountsSection(account)}
-      ${paystubVault(account, false)}
-      ${mortgageProfileSection(account)}
-      <section class="panel profile-inventory">
-        <div class="panel-heading"><div><h3>Recurring bills</h3><p>New forms receive each saved bill once, with optional monthly schedule details.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="recurringBills"><span aria-hidden="true">＋</span> Add recurring bill</button></div>
-        <div class="profile-inventory-list">
-          ${account.financialInventory.recurringBills.length ? account.financialInventory.recurringBills.map((bill, index) => recurringBillProfileCard(bill, index)).join("") : emptyInline("No recurring bills", "Add recurring bills to automatically prefill future worksheets.")}
-        </div>
-      </section>
-      <section class="panel profile-inventory">
-        <div class="panel-heading"><div><h3>Card accounts</h3><p>Track standard APR and separate purchase or balance-transfer promotional offers.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="creditCards"><span aria-hidden="true">＋</span> Add card account</button></div>
-        <div class="profile-inventory-list">
-          ${account.financialInventory.creditCards.length ? account.financialInventory.creditCards.map((card, index) => creditCardProfileCard(card, index)).join("") : emptyInline("No card accounts", "Add a card account to prefill balances and APR details.")}
-        </div>
-      </section>
-      <section class="panel profile-inventory">
-        <div class="panel-heading"><div><h3>Saved debts</h3><p>Initial debt balances and rates for new worksheets.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="debts"><span aria-hidden="true">＋</span> Add debt</button></div>
-        <div class="profile-inventory-list">
-          ${account.financialInventory.debts.length ? account.financialInventory.debts.map((debt, index) => debtProfileCard(debt, index)).join("") : emptyInline("No debts saved", "Add debt accounts to carry balances into each new form.")}
-        </div>
-      </section>
-      <section class="panel profile-inventory">
-        <div class="panel-heading"><div><h3>Student loans</h3><p>Track each student loan separately for payoff planning.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="studentLoans"><span aria-hidden="true">＋</span> Add student loan</button></div>
-        <div class="profile-inventory-list">
-          ${account.financialInventory.studentLoans.length ? account.financialInventory.studentLoans.map((loan, index) => studentLoanProfileCard(loan, index)).join("") : emptyInline("No student loans saved", "Add student loans to include them in future worksheets.")}
-        </div>
-      </section>
+      ${financialProfileSections(account, true)}
     </div>
   `;
   app.innerHTML = shell(content, {
     title: "Financial profile",
     subtitle: "Saved household, financial, and paystub archive",
   });
+}
+
+function financialProfileSections(account, includePaystubs) {
+  return `
+    ${assetAccountsSection(account)}
+    ${includePaystubs ? paystubVault(account, false) : ""}
+    ${mortgageProfileSection(account)}
+    <section class="panel profile-inventory">
+      <div class="panel-heading"><div><h3>Recurring bills</h3><p>Save recurring bills and optional monthly schedule details.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="recurringBills"><span aria-hidden="true">＋</span> Add recurring bill</button></div>
+      <div class="profile-inventory-list">
+        ${account.financialInventory.recurringBills.length ? account.financialInventory.recurringBills.map((bill, index) => recurringBillProfileCard(bill, index)).join("") : emptyInline("No recurring bills", "Add recurring bills to organize your private financial profile.")}
+      </div>
+    </section>
+    <section class="panel profile-inventory">
+      <div class="panel-heading"><div><h3>Card accounts</h3><p>Track standard APR and separate purchase or balance-transfer promotional offers.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="creditCards"><span aria-hidden="true">＋</span> Add card account</button></div>
+      <div class="profile-inventory-list">
+        ${account.financialInventory.creditCards.length ? account.financialInventory.creditCards.map((card, index) => creditCardProfileCard(card, index)).join("") : emptyInline("No card accounts", "Add a card account to track balances and APR details.")}
+      </div>
+    </section>
+    <section class="panel profile-inventory">
+      <div class="panel-heading"><div><h3>Saved debts</h3><p>Track debt balances, payments, and rates.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="debts"><span aria-hidden="true">＋</span> Add debt</button></div>
+      <div class="profile-inventory-list">
+        ${account.financialInventory.debts.length ? account.financialInventory.debts.map((debt, index) => debtProfileCard(debt, index)).join("") : emptyInline("No debts saved", "Add debt accounts to track balances privately.")}
+      </div>
+    </section>
+    <section class="panel profile-inventory">
+      <div class="panel-heading"><div><h3>Student loans</h3><p>Track each student loan separately for payoff planning.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="studentLoans"><span aria-hidden="true">＋</span> Add student loan</button></div>
+      <div class="profile-inventory-list">
+        ${account.financialInventory.studentLoans.length ? account.financialInventory.studentLoans.map((loan, index) => studentLoanProfileCard(loan, index)).join("") : emptyInline("No student loans saved", "Add student loans to track payoff progress.")}
+      </div>
+    </section>
+  `;
 }
 
 function personalProfilePanel(account) {
@@ -2882,7 +2889,6 @@ function renderDashboard() {
           ${metric("Milestone alerts", unreadNotifications.length)}
         </section>
         ${notificationCenter(account, notifications)}
-        ${coachQuickOverview(mentees, sharedForms, withdrawals)}
         <div class="page-heading">
           <div>
             <h2>Documents to review</h2>
@@ -2955,42 +2961,6 @@ function dashboardBanner(account, isCoach) {
         <p>${isCoach ? "Review plans, celebrate progress, and keep every next step visible." : "Every paycheck is another opportunity to build financial integrity and momentum."}</p>
       </div>
       <img src="assets/fit-logo-exact-transparent.png" alt="Financial Integrity Training">
-    </section>
-  `;
-}
-
-function coachQuickOverview(mentees, sharedForms, withdrawals) {
-  const activity = [
-    ...sharedForms.map((form) => ({
-      time: form.updatedAt,
-      person: form.ownerName,
-      label: form.status === "submitted" ? "sent a worksheet for review" : form.status === "approved" ? "has an approved worksheet update" : "updated a worksheet",
-      value: money(calculate(form).available),
-    })),
-    ...withdrawals.map((withdrawal) => ({
-      time: withdrawal.createdAt,
-      person: appState.accounts[withdrawal.memberEmail]?.name || withdrawal.memberEmail,
-      label: "submitted a savings withdrawal",
-      value: `-${money(withdrawal.amount)}`,
-    })),
-    ...mentees.flatMap((member) =>
-      member.savingsInvestmentAccounts.map((asset) => ({
-        time: asset.history.at(-1)?.recordedAt || `${asset.updatedAt}T12:00:00`,
-        person: member.name,
-        label: `updated ${asset.name || asset.type}`,
-        value: money(asset.balance),
-      })),
-    ),
-  ]
-    .filter((item) => item.time)
-    .sort((a, b) => new Date(b.time) - new Date(a.time))
-    .slice(0, 6);
-  return `
-    <section class="panel coach-quick-overview">
-      <div class="panel-heading"><div><h3>Quick overview</h3><p>Recent changes from your active mentees</p></div><span class="badge green">Live</span></div>
-      <div class="quick-activity-list">
-        ${activity.length ? activity.map((item) => `<article><div><strong>${escapeHtml(item.person)}</strong><span>${escapeHtml(item.label)} · ${updatedLabel(item.time)}</span></div><b>${escapeHtml(item.value)}</b></article>`).join("") : emptyInline("No recent changes", "Mentee updates will appear here as they happen.")}
-      </div>
     </section>
   `;
 }
@@ -3720,63 +3690,6 @@ function handleCalculatorPointerEnd(event) {
   if (calculator) saveCalculatorGeometry(calculator);
 }
 
-function calculatorKeyboardKey(event) {
-  if (/^Numpad\d$/.test(event.code)) return event.code.slice(-1);
-  const codeKeys = {
-    NumpadDecimal: ".",
-    NumpadAdd: "+",
-    NumpadSubtract: "−",
-    NumpadMultiply: "×",
-    NumpadDivide: "÷",
-    NumpadEnter: "=",
-  };
-  if (codeKeys[event.code]) return codeKeys[event.code];
-  if (/^\d$/.test(event.key)) return event.key;
-  const keyMap = {
-    ".": ".",
-    "+": "+",
-    "-": "−",
-    "*": "×",
-    "/": "÷",
-    "%": "%",
-    Enter: "=",
-    "=": "=",
-    Escape: "AC",
-    Delete: "AC",
-    Backspace: "backspace",
-  };
-  return keyMap[event.key] || "";
-}
-
-function handleCalculatorKeyboard(event) {
-  if (!activeFormId || activeView !== "editor") return false;
-  if (event.target?.matches?.("input, textarea, select, [contenteditable='true']")) return false;
-  if (event.target?.matches?.("button") && !event.target.closest("[data-draggable-calculator]")) return false;
-  const calculator = document.querySelector(`[data-draggable-calculator="${activeFormId}"]`);
-  const form = appState.forms[activeFormId];
-  if (!calculator || !form || calculator.querySelector("[data-calculator-key]")?.disabled) return false;
-  const key = calculatorKeyboardKey(event);
-  if (!key) return false;
-  event.preventDefault();
-  saveCalculatorGeometry(calculator);
-  try {
-    let completed = false;
-    if (key === "backspace") {
-      form.data.calculatorDraft = String(form.data.calculatorDraft || "").slice(0, -1);
-      form.data.calculatorJustEvaluated = false;
-    } else {
-      completed = applyCalculatorKey(form, key);
-    }
-    form.updatedAt = new Date().toISOString();
-    saveState();
-    renderEditor();
-    if (completed) showToast("Calculation saved to the recent list.");
-  } catch {
-    showToast("That calculation could not be completed.");
-  }
-  return true;
-}
-
 async function prepareProfilePhoto(file) {
   const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
   if (!allowedTypes.includes(file.type)) {
@@ -3786,7 +3699,7 @@ async function prepareProfilePhoto(file) {
   if (file.size > 12 * 1024 * 1024) {
     throw new Error("Choose a profile photo smaller than 12 MB.");
   }
-  const image = await createImageBitmap(file);
+  const image = await loadProfilePhotoImage(file);
   const maxDimension = 1200;
   const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
   const canvas = document.createElement("canvas");
@@ -3805,6 +3718,45 @@ async function prepareProfilePhoto(file) {
   }
   const baseName = file.name.replace(/\.[^.]+$/, "") || "profile-photo";
   return new File([blob], `${baseName}.jpg`, { type: "image/jpeg", lastModified: Date.now() });
+}
+
+async function loadProfilePhotoImage(file) {
+  if ("createImageBitmap" in window) {
+    try {
+      return await createImageBitmap(file);
+    } catch {}
+  }
+  const dataUrl = await fileDataUrl(file);
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("This photo could not be opened."));
+    image.src = dataUrl;
+  });
+}
+
+function fileDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("This photo could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function saveUploadedProfilePhoto(account, field, file, uploaded) {
+  account[field] = {
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    uploadedAt: new Date().toISOString(),
+    ...uploaded,
+  };
+  if (productionBackend.enabled) {
+    await productionBackend.saveNow(appState);
+  } else if (!saveState()) {
+    throw new Error("The photo could not be saved.");
+  }
 }
 
 function notesPanel(form, readOnly) {
@@ -5496,7 +5448,6 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (handleCalculatorKeyboard(event)) return;
   if (event.key !== "Enter" || event.target.matches("textarea")) return;
   if (event.target.matches("[data-profile-path], [data-asset-path], [data-path]")) {
     event.preventDefault();
@@ -5610,14 +5561,7 @@ document.addEventListener("change", async (event) => {
           "account-holder",
         );
         const account = currentAccount();
-        account.profilePhoto = {
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          uploadedAt: new Date().toISOString(),
-          ...uploaded,
-        };
-        saveState();
+        await saveUploadedProfilePhoto(account, "profilePhoto", file, uploaded);
         renderProfile();
         showToast("Profile photo securely updated.");
       } catch (error) {
@@ -5627,18 +5571,14 @@ document.addEventListener("change", async (event) => {
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const account = currentAccount();
-      account.profilePhoto = {
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        uploadedAt: new Date().toISOString(),
-        dataUrl: reader.result,
-      };
-      if (saveState()) {
+      try {
+        await saveUploadedProfilePhoto(account, "profilePhoto", file, { dataUrl: reader.result });
         renderProfile();
         showToast("Profile photo updated");
+      } catch (error) {
+        showToast(error.message || "Profile photo could not be saved.");
       }
     };
     reader.readAsDataURL(file);
@@ -5665,14 +5605,7 @@ document.addEventListener("change", async (event) => {
           "spouse",
         );
         const account = currentAccount();
-        account.spousePhoto = {
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          uploadedAt: new Date().toISOString(),
-          ...uploaded,
-        };
-        saveState();
+        await saveUploadedProfilePhoto(account, "spousePhoto", file, uploaded);
         renderProfile();
         showToast("Spouse photo securely updated.");
       } catch (error) {
@@ -5682,18 +5615,14 @@ document.addEventListener("change", async (event) => {
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const account = currentAccount();
-      account.spousePhoto = {
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        uploadedAt: new Date().toISOString(),
-        dataUrl: reader.result,
-      };
-      if (saveState()) {
+      try {
+        await saveUploadedProfilePhoto(account, "spousePhoto", file, { dataUrl: reader.result });
         renderProfile();
         showToast("Spouse photo updated");
+      } catch (error) {
+        showToast(error.message || "Spouse photo could not be saved.");
       }
     };
     reader.readAsDataURL(file);
