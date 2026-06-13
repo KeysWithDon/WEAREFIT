@@ -26,6 +26,7 @@ Deno.serve(async (request) => {
 
     const body = await request.json();
     const acceptedCoachInvite = body.invite === true;
+    const refreshOnly = body.refreshOnly === true;
     const coachEmail = String(body.coachEmail || "").trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(coachEmail)) {
       throw new Error("Enter a valid coach email.");
@@ -38,6 +39,12 @@ Deno.serve(async (request) => {
       .maybeSingle();
     if (coachError) throw coachError;
     if (!coachRow) throw new Error("No coach account exists for that email yet.");
+    const { data: coachProfile, error: coachProfileError } = await adminClient
+      .from("profiles")
+      .select("full_name")
+      .eq("email", coachEmail)
+      .maybeSingle();
+    if (coachProfileError) throw coachProfileError;
 
     const memberEmail = authData.user.email.toLowerCase();
     const { data: memberRow, error: memberError } = await adminClient
@@ -50,10 +57,18 @@ Deno.serve(async (request) => {
     const state = memberRow.state || {};
     const member = state.accounts?.[memberEmail] || {};
     const coachAccount = coachRow.state?.accounts?.[coachEmail] || {};
-    const coachName = coachAccount.name || "F.I.T. coach";
+    if (refreshOnly && member.coachEmail !== coachEmail) {
+      throw new Error("This coach is not connected to your account.");
+    }
+    const profileName = String(coachProfile?.full_name || "").trim();
+    const stateName = String(coachAccount.name || "").trim();
+    const coachName =
+      (profileName && profileName.toLowerCase() !== coachEmail ? profileName : "") ||
+      (stateName && stateName.toLowerCase() !== coachEmail ? stateName : "") ||
+      "F.I.T. coach";
     member.coachEmail = coachEmail;
     member.coachName = coachName;
-    member.coachRequestStatus = acceptedCoachInvite ? "approved" : "pending";
+    if (!refreshOnly) member.coachRequestStatus = acceptedCoachInvite ? "approved" : "pending";
     state.accounts = {
       ...(state.accounts || {}),
       [memberEmail]: member,
@@ -64,19 +79,21 @@ Deno.serve(async (request) => {
         profilePhoto: coachAccount.profilePhoto || null,
       },
     };
-    state.coachRequests = (state.coachRequests || []).map((item: Record<string, unknown>) =>
-      item.memberEmail === memberEmail && item.status === "pending"
-        ? { ...item, status: "replaced" }
-        : item
-    );
-    state.coachRequests.push({
-      id: crypto.randomUUID(),
-      memberEmail,
-      coachEmail,
-      status: acceptedCoachInvite ? "approved" : "pending",
-      createdAt: new Date().toISOString(),
-      respondedAt: acceptedCoachInvite ? new Date().toISOString() : null,
-    });
+    if (!refreshOnly) {
+      state.coachRequests = (state.coachRequests || []).map((item: Record<string, unknown>) =>
+        item.memberEmail === memberEmail && item.status === "pending"
+          ? { ...item, status: "replaced" }
+          : item
+      );
+      state.coachRequests.push({
+        id: crypto.randomUUID(),
+        memberEmail,
+        coachEmail,
+        status: acceptedCoachInvite ? "approved" : "pending",
+        createdAt: new Date().toISOString(),
+        respondedAt: acceptedCoachInvite ? new Date().toISOString() : null,
+      });
+    }
 
     const { error: updateError } = await adminClient
       .from("portal_states")
