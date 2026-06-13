@@ -126,6 +126,9 @@
         profile: {
           maritalStatus: "",
           spouseName: "",
+          spouseEmployer: "",
+          spousePhone: "",
+          spousePayFrequency: "",
           phone: "",
           address: "",
           employer: "",
@@ -133,7 +136,7 @@
         },
         paystubs: [],
         savingsInvestmentAccounts: [],
-        financialInventory: { recurringBills: [], creditCards: [], debts: [] },
+        financialInventory: { recurringBills: [], creditCards: [], debts: [], studentLoans: [], mortgage: {} },
       };
       const state = {
         accounts: { [email]: account },
