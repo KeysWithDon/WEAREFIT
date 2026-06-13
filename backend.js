@@ -66,6 +66,7 @@
       ),
       withdrawals: state.withdrawals.filter((item) => item.memberEmail === ownerEmail),
       sessions: state.sessions.filter((item) => item.memberEmail === ownerEmail),
+      notifications: (state.notifications || []).filter((item) => item.memberEmail === ownerEmail),
       dateAutofillDisabled: true,
       sessionEmail: null,
     };
@@ -79,6 +80,7 @@
       coachInvites: [],
       withdrawals: [],
       sessions: [],
+      notifications: [],
       dateAutofillDisabled: true,
       sessionEmail,
     };
@@ -86,7 +88,7 @@
       const state = row.state || {};
       Object.assign(merged.accounts, state.accounts || {});
       Object.assign(merged.forms, state.forms || {});
-      ["coachRequests", "coachInvites", "withdrawals", "sessions"].forEach((key) => {
+      ["coachRequests", "coachInvites", "withdrawals", "sessions", "notifications"].forEach((key) => {
         const seen = new Set(merged[key].map((item) => item.id));
         (state[key] || []).forEach((item) => {
           if (!seen.has(item.id)) merged[key].push(item);
@@ -162,6 +164,7 @@
         coachInvites: [],
         withdrawals: [],
         sessions: [],
+        notifications: [],
         dateAutofillDisabled: true,
         sessionEmail: null,
       };
