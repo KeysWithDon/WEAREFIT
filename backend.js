@@ -23,6 +23,13 @@
     return String(value || "").trim().toLowerCase();
   }
 
+  function usableDisplayName(value, email = "") {
+    const name = String(value || "").trim();
+    return name && normalizeEmail(name) !== normalizeEmail(email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name)
+      ? name
+      : "";
+  }
+
   async function throwFunctionError(error, fallback) {
     if (!error) return;
     let message = "";
@@ -178,13 +185,40 @@
     (presenceRows || []).forEach((presence) => {
       const presenceEmail = normalizeEmail(presence.email);
       merged.accounts[presenceEmail] ||= {
-        name: presenceEmail,
+        name: "",
         email: presenceEmail,
         role: "coach",
         profilePhoto: null,
       };
       merged.accounts[presenceEmail].lastActiveAt = presence.last_active_at;
     });
+    const currentAccount = merged.accounts[email];
+    if (
+      currentAccount?.role === "user" &&
+      currentAccount.coachEmail &&
+      !(
+        usableDisplayName(currentAccount.coachName, currentAccount.coachEmail) ||
+        usableDisplayName(merged.accounts[currentAccount.coachEmail]?.name, currentAccount.coachEmail)
+      )
+    ) {
+      try {
+        const { data: refreshedCoach, error: refreshError } = await client.functions.invoke("connect-coach", {
+          body: { coachEmail: currentAccount.coachEmail, refreshOnly: true },
+        });
+        await throwFunctionError(refreshError, "The connected coach name could not be refreshed.");
+        if (refreshedCoach?.coachName) {
+          currentAccount.coachName = refreshedCoach.coachName;
+          merged.accounts[currentAccount.coachEmail] = {
+            ...(merged.accounts[currentAccount.coachEmail] || {}),
+            name: refreshedCoach.coachName,
+            email: currentAccount.coachEmail,
+            role: "coach",
+          };
+        }
+      } catch (refreshError) {
+        console.warn("Could not refresh connected coach name", refreshError);
+      }
+    }
     await refreshFileUrls(merged);
     return merged;
   }
@@ -211,6 +245,11 @@
     const currentEmail = normalizeEmail(currentSession.user.email);
     const current = state.accounts[currentEmail];
     if (!current) return;
+    const { error: profileError } = await client
+      .from("profiles")
+      .update({ full_name: current.name || "", updated_at: new Date().toISOString() })
+      .eq("id", currentSession.user.id);
+    if (profileError) throw profileError;
     await updatePresence(current.lastActiveAt || null);
     const allowedOwners = Object.values(state.accounts).filter(
       (account) =>
