@@ -7,7 +7,12 @@
     !config.supabaseUrl.includes("YOUR_PROJECT");
   const client = configured
     ? window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true,
+          storage: window.sessionStorage,
+        },
       })
     : null;
   let accessibleStateRows = new Map();
