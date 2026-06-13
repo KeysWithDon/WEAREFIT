@@ -54,7 +54,16 @@ Deno.serve(async (request) => {
     member.coachEmail = coachEmail;
     member.coachName = coachName;
     member.coachRequestStatus = acceptedCoachInvite ? "approved" : "pending";
-    state.accounts = { ...(state.accounts || {}), [memberEmail]: member };
+    state.accounts = {
+      ...(state.accounts || {}),
+      [memberEmail]: member,
+      [coachEmail]: {
+        name: coachName,
+        email: coachEmail,
+        role: "coach",
+        profilePhoto: coachAccount.profilePhoto || null,
+      },
+    };
     state.coachRequests = (state.coachRequests || []).map((item: Record<string, unknown>) =>
       item.memberEmail === memberEmail && item.status === "pending"
         ? { ...item, status: "replaced" }
