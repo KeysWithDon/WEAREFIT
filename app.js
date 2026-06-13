@@ -22,6 +22,7 @@ let lastUserActivityAt = Date.now();
 let lastPresenceUpdateAt = 0;
 let inactivityLogoutInProgress = false;
 let calculatorDragState = null;
+let calculatorInteractionUntil = 0;
 const INACTIVITY_LIMIT_MS = 15 * 60 * 1000;
 const urlParameters = new URLSearchParams(window.location.search);
 const inviteCoachFromUrl = urlParameters.get("coachInvite");
@@ -3556,8 +3557,31 @@ function calculatorPanel(form, readOnly) {
     <div class="calculator-keypad" aria-label="Calculator keypad">
       ${keys.map(([key, kind]) => `<button class="calculator-key ${kind}" type="button" data-calculator-key="${escapeHtml(key)}" data-calculator-form-id="${form.id}" ${readOnly ? "disabled" : ""}>${escapeHtml(key)}</button>`).join("")}
     </div>
-    <div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(currencyValue(item.result).toFixed(2))}</strong></div>`).join("") : `<p class="calculator-empty">Recent calculations appear here.</p>`}</div>
+    <div class="calculator-history">${calculatorHistoryMarkup(form)}</div>
   </aside>`;
+}
+
+function calculatorHistoryMarkup(form) {
+  const history = (form.data.calculatorHistory || []).slice(-10).reverse();
+  return history.length
+    ? history
+        .map(
+          (item) =>
+            `<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(currencyValue(item.result).toFixed(2))}</strong></div>`,
+        )
+        .join("")
+    : `<p class="calculator-empty">Recent calculations appear here.</p>`;
+}
+
+function refreshCalculatorDisplay(calculator, form) {
+  if (!calculator || !form) return;
+  const history = (form.data.calculatorHistory || []).slice(-10);
+  const display = calculator.querySelector(".calculator-display");
+  const count = calculator.querySelector(".calculator-count");
+  const historyPanel = calculator.querySelector(".calculator-history");
+  if (display) display.textContent = form.data.calculatorDraft || "0";
+  if (count) count.textContent = `${history.length}/10`;
+  if (historyPanel) historyPanel.innerHTML = calculatorHistoryMarkup(form);
 }
 
 function evaluateCalculatorExpression(expression) {
@@ -4511,12 +4535,14 @@ document.addEventListener("click", async (event) => {
   if (calculatorKey) {
     const form = appState.forms[calculatorKey.dataset.calculatorFormId];
     if (!form) return;
-    saveCalculatorGeometry(calculatorKey.closest("[data-draggable-calculator]"));
+    const calculator = calculatorKey.closest("[data-draggable-calculator]");
+    calculatorInteractionUntil = Date.now() + 2500;
+    saveCalculatorGeometry(calculator);
     try {
       const completed = applyCalculatorKey(form, calculatorKey.dataset.calculatorKey);
       form.updatedAt = new Date().toISOString();
       saveState();
-      renderEditor();
+      refreshCalculatorDisplay(calculator, form);
       if (completed) showToast("Calculation saved to the recent list.");
     } catch {
       showToast("That calculation could not be completed.");
@@ -5719,6 +5745,7 @@ async function refreshPortalFromBackend() {
     !productionBackend.enabled ||
     portalRefreshInProgress ||
     profilePhotoUpdateInProgress ||
+    Date.now() < calculatorInteractionUntil ||
     !currentAccount()
   ) return;
   portalRefreshInProgress = true;
