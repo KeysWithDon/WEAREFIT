@@ -87,7 +87,9 @@ function blankCreditCard() {
     id: uid("card"),
     account: "",
     dueDate: "",
-    amountDue: "",
+    totalBalance: "",
+    lastStatementBalance: "",
+    paymentDue: "",
     contribution: "",
     apr: "",
     promoType: "none",
@@ -134,7 +136,9 @@ function blankProfileCard() {
     id: uid("profile-card"),
     account: "",
     dueDate: "",
-    amountDue: "",
+    totalBalance: "",
+    lastStatementBalance: "",
+    paymentDue: "",
     apr: "",
     promoType: "none",
     purchasePromoRate: "",
@@ -158,6 +162,18 @@ function blankProfileDebt() {
   };
 }
 
+function blankStudentLoan() {
+  return {
+    id: uid("student-loan"),
+    account: "",
+    totalOwed: "",
+    apr: "",
+    paymentDue: "",
+    dueDate: "",
+    contribution: "",
+  };
+}
+
 function blankSavingsInvestmentAccount() {
   return {
     id: uid("asset-account"),
@@ -170,15 +186,35 @@ function blankSavingsInvestmentAccount() {
   };
 }
 
+function removePartialNameDuplicates(rows = [], key = "name") {
+  const named = rows.filter((row) => String(row?.[key] || "").trim());
+  return rows.filter((row) => {
+    const value = String(row?.[key] || "").trim().toLowerCase();
+    if (!value) return true;
+    return !named.some((other) => {
+      const candidate = String(other?.[key] || "").trim().toLowerCase();
+      return candidate.length > value.length && candidate.startsWith(value);
+    });
+  });
+}
+
 function ensureFinancialInventory(account) {
   account.financialInventory ||= {
     recurringBills: [],
     creditCards: [],
     debts: [],
+    studentLoans: [],
+    mortgage: {},
   };
   account.financialInventory.recurringBills ||= [];
   account.financialInventory.creditCards ||= [];
   account.financialInventory.debts ||= [];
+  account.financialInventory.studentLoans ||= [];
+  account.financialInventory.mortgage ||= {};
+  account.financialInventory.recurringBills = removePartialNameDuplicates(account.financialInventory.recurringBills, "name");
+  account.financialInventory.creditCards = removePartialNameDuplicates(account.financialInventory.creditCards, "account");
+  account.financialInventory.debts = removePartialNameDuplicates(account.financialInventory.debts, "account");
+  account.financialInventory.studentLoans = removePartialNameDuplicates(account.financialInventory.studentLoans, "account");
 }
 
 function ensureAccountModel(account) {
@@ -188,10 +224,15 @@ function ensureAccountModel(account) {
   account.profile ||= {};
   account.profile.maritalStatus ||= "";
   account.profile.spouseName ||= "";
+  account.profile.spouseEmployer ||= "";
+  account.profile.spousePhone ||= "";
+  account.profile.spousePayFrequency ||= "";
   account.profile.phone ||= "";
   account.profile.address ||= "";
   account.profile.employer ||= "";
   account.profile.payFrequency ||= "";
+  if (/twice monthly/i.test(account.profile.payFrequency)) account.profile.payFrequency = "Biweekly";
+  if (/twice monthly/i.test(account.profile.spousePayFrequency)) account.profile.spousePayFrequency = "Biweekly";
   account.profilePhoto ||= null;
   account.spousePhoto ||= null;
   account.coachName ||= "";
@@ -227,9 +268,46 @@ function ensureAccountModel(account) {
     delete bill.dueDate;
   });
   account.financialInventory.creditCards.forEach(migratePromoCard);
+  account.financialInventory.studentLoans = account.financialInventory.studentLoans.map((loan) => ({
+    ...blankStudentLoan(),
+    ...loan,
+  }));
+  const mortgage = account.financialInventory.mortgage;
+  mortgage.totalAmount ||= "";
+  mortgage.interestRate ||= "";
+  mortgage.currentBalance ||= "";
+}
+
+function normalizeStateModels(state) {
+  Object.values(state.accounts || {}).forEach(ensureAccountModel);
+  Object.values(state.forms || {}).forEach((form) => {
+    form.data ||= {};
+    form.data.bills ||= {};
+    billGroups.forEach(([key]) => {
+      form.data.bills[key] = removePartialNameDuplicates(form.data.bills[key] || [], "name");
+      while (form.data.bills[key].length < 3) form.data.bills[key].push(blankBill());
+    });
+    form.data.creditCards = removePartialNameDuplicates(form.data.creditCards || [], "account").map((card) => {
+      const migrated = { ...blankCreditCard(), ...card };
+      migratePromoCard(migrated);
+      return migrated;
+    });
+    form.data.debts = removePartialNameDuplicates(form.data.debts || [], "account").map((debt) => ({ ...blankDebt(), ...debt }));
+    form.data.studentLoans = removePartialNameDuplicates(form.data.studentLoans || [], "account").map((loan) => ({ ...blankStudentLoan(), ...loan }));
+    form.data.mortgage = { totalAmount: "", interestRate: "", currentBalance: "", paymentAmount: "", nextDueDate: "", mustPayBy: "", remainingBefore: "", contribution: "", ...(form.data.mortgage || {}) };
+    form.data.variableSpending ||= [];
+    form.data.savings ||= { goal: "", current: "", contribution: "" };
+    form.data.overview ||= { checkDate: "", thisCheck: "", additionalIncome: "" };
+    form.data.notes ||= "";
+  });
+  return state;
 }
 
 function migratePromoCard(card) {
+  if (!Object.hasOwn(card, "totalBalance")) card.totalBalance = card.amountDue || "";
+  if (!Object.hasOwn(card, "lastStatementBalance")) card.lastStatementBalance = card.amountDue || "";
+  if (!Object.hasOwn(card, "paymentDue")) card.paymentDue = card.amountDue || "";
+  delete card.amountDue;
   if (!card.promoType) {
     card.promoType = card.promotionalRateApplied ? "purchases" : "none";
   }
@@ -367,6 +445,12 @@ function syncDraftFormsWithFinancialProfile(account) {
         2,
       );
       form.data.creditCards.forEach(migratePromoCard);
+      form.data.studentLoans = syncWorksheetAccountsWithProfile(
+        form.data.studentLoans || [],
+        account.financialInventory.studentLoans,
+        blankStudentLoan,
+        0,
+      );
       form.data.debts = syncWorksheetAccountsWithProfile(
         form.data.debts,
         account.financialInventory.debts,
@@ -376,6 +460,12 @@ function syncDraftFormsWithFinancialProfile(account) {
       if (account.savingsInvestmentAccounts.some((item) => item.type === "savings")) {
         form.data.savings.current = String(savingsTotal);
       }
+      form.data.mortgage = {
+        ...form.data.mortgage,
+        totalAmount: account.financialInventory.mortgage.totalAmount || form.data.mortgage.totalAmount || "",
+        interestRate: account.financialInventory.mortgage.interestRate || form.data.mortgage.interestRate || "",
+        currentBalance: account.financialInventory.mortgage.currentBalance || form.data.mortgage.currentBalance || "",
+      };
       form.generatedFromProfile = true;
       form.updatedAt = new Date().toISOString();
     });
@@ -438,6 +528,9 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
         }),
       ),
       mortgage: {
+        totalAmount: inventory.mortgage?.totalAmount || carryForward.mortgage?.totalAmount || "",
+        interestRate: inventory.mortgage?.interestRate || carryForward.mortgage?.interestRate || "",
+        currentBalance: inventory.mortgage?.currentBalance || carryForward.mortgage?.currentBalance || "",
         paymentAmount: carryForward.mortgage?.paymentAmount || "",
         nextDueDate: carryForward.mortgage?.nextDueDate || "",
         mustPayBy: carryForward.mortgage?.mustPayBy || "",
@@ -449,7 +542,7 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
             const nextCard = {
               ...blankCreditCard(),
               ...card,
-              contribution: "",
+              contribution: card.paymentDue || "",
               coachDecision: "",
             };
             migratePromoCard(nextCard);
@@ -469,6 +562,9 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
       debts: sourceDebts?.length
         ? clone(sourceDebts).map((debt) => ({ ...blankDebt(), ...debt, contribution: "" }))
         : [blankDebt(), blankDebt(), blankDebt()],
+      studentLoans: inventory.studentLoans?.length
+        ? clone(inventory.studentLoans).map((loan) => ({ ...blankStudentLoan(), ...loan, contribution: loan.paymentDue || "" }))
+        : [],
       notes: "",
     },
   };
@@ -533,7 +629,12 @@ function loadState() {
         form.approvedBy ||= null;
         billGroups.forEach(([key]) => {
           form.data.bills[key] ||= [blankBill(), blankBill(), blankBill()];
+          form.data.bills[key] = removePartialNameDuplicates(form.data.bills[key], "name");
+          while (form.data.bills[key].length < 3) form.data.bills[key].push(blankBill());
         });
+        form.data.creditCards = removePartialNameDuplicates(form.data.creditCards, "account");
+        form.data.debts = removePartialNameDuplicates(form.data.debts, "account");
+        form.data.studentLoans = removePartialNameDuplicates(form.data.studentLoans, "account");
         Object.values(form.data.bills)
           .flat()
           .forEach((bill) => {
@@ -547,6 +648,15 @@ function loadState() {
           card.promotionExpiration ||= "";
           migratePromoCard(card);
         });
+        form.data.studentLoans ||= [];
+        form.data.studentLoans = form.data.studentLoans.map((loan) => ({
+          ...blankStudentLoan(),
+          ...loan,
+        }));
+        form.data.mortgage ||= {};
+        form.data.mortgage.totalAmount ||= "";
+        form.data.mortgage.interestRate ||= "";
+        form.data.mortgage.currentBalance ||= form.data.mortgage.remainingBefore || "";
         form.data.variableSpending.forEach((item) => {
           delete item.actual;
         });
@@ -568,7 +678,7 @@ function loadState() {
               bill.dueDate = "";
             });
           form.data.creditCards
-            .filter((card) => !card.account && !card.amountDue && card.dueDate === todayValue())
+            .filter((card) => !card.account && !card.paymentDue && card.dueDate === todayValue())
             .forEach((card) => {
               card.dueDate = "";
             });
@@ -621,6 +731,9 @@ function seedState() {
     profile: {
       maritalStatus: "",
       spouseName: "",
+      spouseEmployer: "",
+      spousePhone: "",
+      spousePayFrequency: "",
       phone: "",
       address: "",
       employer: "",
@@ -631,6 +744,8 @@ function seedState() {
       recurringBills: [],
       creditCards: [],
       debts: [],
+      studentLoans: [],
+      mortgage: {},
     },
   };
   const form = blankForm(member);
@@ -661,7 +776,9 @@ function seedState() {
     ...form.data.creditCards[0],
     account: "Everyday Card",
     dueDate: "2026-06-21",
-    amountDue: "850",
+    totalBalance: "850",
+    lastStatementBalance: "850",
+    paymentDue: "300",
     contribution: "300",
     apr: "19.99",
   };
@@ -697,7 +814,9 @@ function seedState() {
         ...blankProfileCard(),
         account: "Everyday Card",
         dueDate: "2026-06-21",
-        amountDue: "850",
+        totalBalance: "850",
+        lastStatementBalance: "850",
+        paymentDue: "300",
         apr: "19.99",
       },
     ],
@@ -773,6 +892,7 @@ function saveState() {
 
 async function saveFinancialProfileNow() {
   const account = currentAccount();
+  commitFinancialProfileInputs(account);
   const profileForm = document.getElementById("profile-form");
   if (account && profileForm) {
     const data = new FormData(profileForm);
@@ -784,6 +904,9 @@ async function saveFinancialProfileNow() {
     account.profile.maritalStatus = data.get("maritalStatus");
     account.profile.spouseName =
       account.profile.maritalStatus === "married" ? data.get("spouseName").trim() : "";
+    account.profile.spouseEmployer = account.profile.maritalStatus === "married" ? String(data.get("spouseEmployer") || "").trim() : "";
+    account.profile.spousePhone = account.profile.maritalStatus === "married" ? String(data.get("spousePhone") || "").trim() : "";
+    account.profile.spousePayFrequency = account.profile.maritalStatus === "married" ? String(data.get("spousePayFrequency") || "") : "";
     account.profileCompleted = profileIsComplete(account);
   }
   if (account) syncDraftFormsWithFinancialProfile(account);
@@ -794,6 +917,19 @@ async function saveFinancialProfileNow() {
   } catch (error) {
     showToast(error.message || "Financial profile could not be saved.");
   }
+}
+
+function commitFinancialProfileInputs(account = currentAccount()) {
+  if (!account) return;
+  document.querySelectorAll("[data-profile-path]").forEach((input) => {
+    if (validateControlledInput(input)) setAtPath(account, input.dataset.profilePath, input.value);
+  });
+  document.querySelectorAll("[data-asset-path]").forEach((input) => {
+    const [index, field] = input.dataset.assetPath.split(".");
+    const asset = account.savingsInvestmentAccounts[Number(index)];
+    if (asset) asset[field] = input.value;
+  });
+  account.savingsInvestmentAccounts.forEach((_, index) => saveAssetHistoryEntry(account, index));
 }
 
 function currentAccount() {
@@ -864,7 +1000,7 @@ function profileInvestmentTotal(account) {
 }
 
 function profileDebtTotal(account) {
-  return (account.financialInventory?.debts || []).reduce(
+  return [...(account.financialInventory?.debts || []), ...(account.financialInventory?.studentLoans || [])].reduce(
     (sum, debt) => sum + (Number(debt.totalOwed) || 0),
     0,
   );
@@ -985,6 +1121,9 @@ function getMemberCarryForward(account) {
       ]),
     ),
     mortgage: {
+      totalAmount: latest.data.mortgage.totalAmount || "",
+      interestRate: latest.data.mortgage.interestRate || "",
+      currentBalance: String(latestCalc.mortgageAfter || latest.data.mortgage.currentBalance || ""),
       paymentAmount: latest.data.mortgage.paymentAmount,
       nextDueDate: latest.data.mortgage.nextDueDate,
       mustPayBy: latest.data.mortgage.mustPayBy,
@@ -997,9 +1136,11 @@ function getMemberCarryForward(account) {
           .map((card) => ({
             account: card.account,
             dueDate: card.dueDate,
-            amountDue: String(
-              Math.max(0, (Number(card.amountDue) || 0) - (Number(card.contribution) || 0)),
+            totalBalance: String(
+              Math.max(0, (Number(card.totalBalance) || 0) - (Number(card.contribution) || 0)),
             ),
+            lastStatementBalance: card.lastStatementBalance || "",
+            paymentDue: card.paymentDue || "",
             apr: card.apr,
             promoType: card.promoType || "none",
             purchasePromoRate: card.purchasePromoRate || "",
@@ -1022,6 +1163,7 @@ function getMemberCarryForward(account) {
             ),
             contribution: "",
           })),
+    studentLoans: clone(account.financialInventory.studentLoans || []),
   };
 }
 
@@ -1041,9 +1183,13 @@ function calculate(form) {
     (sum, item) => sum + (Number(item.contribution) || 0),
     0,
   );
+  const studentLoanContributions = (data.studentLoans || []).reduce(
+    (sum, item) => sum + (Number(item.contribution) || 0),
+    0,
+  );
   const mortgageContribution = Number(data.mortgage.contribution) || 0;
   const savingsContribution = Number(data.savings.contribution) || 0;
-  const totalDebt = data.debts.reduce(
+  const totalDebt = [...data.debts, ...(data.studentLoans || [])].reduce(
     (sum, item) => sum + (Number(item.totalOwed) || 0),
     0,
   );
@@ -1051,7 +1197,7 @@ function calculate(form) {
     (Number(data.savings.current) || 0) + (Number(data.savings.contribution) || 0);
   const mortgageAfter = Math.max(
     0,
-    (Number(data.mortgage.remainingBefore) || 0) -
+    (Number(data.mortgage.currentBalance || data.mortgage.remainingBefore) || 0) -
       (Number(data.mortgage.contribution) || 0),
   );
   const variableBudget = data.variableSpending.reduce(
@@ -1062,6 +1208,7 @@ function calculate(form) {
     fixedBills +
     creditCards +
     debtContributions +
+    studentLoanContributions +
     mortgageContribution +
     savingsContribution +
     variableBudget;
@@ -1083,6 +1230,7 @@ function calculate(form) {
     fixedBills,
     creditCards,
     debtContributions,
+    studentLoanContributions,
     mortgageContribution,
     savingsContribution,
     totalBills,
@@ -1462,6 +1610,7 @@ function renderProfile() {
       </section>
       ${assetAccountsSection(account)}
       ${paystubVault(account, false)}
+      ${mortgageProfileSection(account)}
       <section class="panel profile-inventory">
         <div class="panel-heading"><div><h3>Recurring bills</h3><p>New forms receive each saved bill once, with optional monthly schedule details.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="recurringBills"><span aria-hidden="true">＋</span> Add recurring bill</button></div>
         <div class="profile-inventory-list">
@@ -1478,6 +1627,12 @@ function renderProfile() {
         <div class="panel-heading"><div><h3>Saved debts</h3><p>Initial debt balances and rates for new worksheets.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="debts"><span aria-hidden="true">＋</span> Add debt</button></div>
         <div class="profile-inventory-list">
           ${account.financialInventory.debts.length ? account.financialInventory.debts.map((debt, index) => debtProfileCard(debt, index)).join("") : emptyInline("No debts saved", "Add debt accounts to carry balances into each new form.")}
+        </div>
+      </section>
+      <section class="panel profile-inventory">
+        <div class="panel-heading"><div><h3>Student loans</h3><p>Track each student loan separately for payoff planning.</p></div><button class="btn btn-secondary btn-small" type="button" data-add-profile-item="studentLoans"><span aria-hidden="true">＋</span> Add student loan</button></div>
+        <div class="profile-inventory-list">
+          ${account.financialInventory.studentLoans.length ? account.financialInventory.studentLoans.map((loan, index) => studentLoanProfileCard(loan, index)).join("") : emptyInline("No student loans saved", "Add student loans to include them in future worksheets.")}
         </div>
       </section>
     </div>
@@ -1510,7 +1665,6 @@ function personalProfilePanel(account) {
                  ${selectOption("", "Select frequency", account.profile.payFrequency)}
                  ${selectOption("Weekly", "Weekly", account.profile.payFrequency)}
                  ${selectOption("Biweekly", "Biweekly", account.profile.payFrequency)}
-                 ${selectOption("Twice monthly", "Twice monthly", account.profile.payFrequency)}
                  ${selectOption("Monthly", "Monthly", account.profile.payFrequency)}
                </select></div>
                <div class="field"><label for="marital-status">Marital status</label><select id="marital-status" class="input" name="maritalStatus" required>
@@ -1518,7 +1672,15 @@ function personalProfilePanel(account) {
                  ${selectOption("single", "Single", account.profile.maritalStatus)}
                  ${selectOption("married", "Married", account.profile.maritalStatus)}
                </select></div>
-               <div class="field spouse-field ${account.profile.maritalStatus === "married" ? "" : "hidden"}"><label for="spouse-name">Spouse name</label><input id="spouse-name" class="input" name="spouseName" value="${escapeHtml(account.profile.spouseName)}" placeholder="Spouse full name" ${account.profile.maritalStatus === "married" ? "required" : ""}></div>`
+               <div class="field spouse-field ${account.profile.maritalStatus === "married" ? "" : "hidden"}"><label for="spouse-name">Spouse name</label><input id="spouse-name" class="input" name="spouseName" value="${escapeHtml(account.profile.spouseName)}" placeholder="Spouse full name" ${account.profile.maritalStatus === "married" ? "required" : ""}></div>
+               <div class="field spouse-field ${account.profile.maritalStatus === "married" ? "" : "hidden"}"><label for="spouse-employer">Spouse employer</label><input id="spouse-employer" class="input" name="spouseEmployer" value="${escapeHtml(account.profile.spouseEmployer)}"></div>
+               <div class="field spouse-field ${account.profile.maritalStatus === "married" ? "" : "hidden"}"><label for="spouse-phone">Phone Number</label><input id="spouse-phone" class="input" name="spousePhone" value="${escapeHtml(account.profile.spousePhone)}" inputmode="tel"></div>
+               <div class="field spouse-field ${account.profile.maritalStatus === "married" ? "" : "hidden"}"><label for="spouse-pay-frequency">Spouse pay frequency</label><select id="spouse-pay-frequency" class="input" name="spousePayFrequency">
+                 ${selectOption("", "Select frequency", account.profile.spousePayFrequency)}
+                 ${selectOption("Weekly", "Weekly", account.profile.spousePayFrequency)}
+                 ${selectOption("Biweekly", "Biweekly", account.profile.spousePayFrequency)}
+                 ${selectOption("Monthly", "Monthly", account.profile.spousePayFrequency)}
+               </select></div>`
         }
         <button class="btn btn-primary profile-save" type="submit">Save financial profile</button>
       </form>
@@ -1767,10 +1929,15 @@ function showMenteeProfileModal(email) {
         }
         <div class="profile-facts">
           ${profileFact("Spouse", member.profile.spouseName || "Not provided")}
+          ${profileFact("Spouse employer", member.profile.spouseEmployer || "Not provided")}
+          ${profileFact("Spouse phone", member.profile.spousePhone || "Not provided")}
+          ${profileFact("Spouse pay frequency", member.profile.spousePayFrequency || "Not provided")}
           ${profileFact("Employer", member.profile.employer || "Not provided")}
           ${profileFact("Pay frequency", member.profile.payFrequency || "Not provided")}
           ${profileFact("Recurring bills", String(member.financialInventory.recurringBills.length))}
           ${profileFact("Card accounts", String(member.financialInventory.creditCards.length))}
+          ${profileFact("Student loans", String(member.financialInventory.studentLoans.length))}
+          ${profileFact("Mortgage balance", money(member.financialInventory.mortgage.currentBalance))}
           ${profileFact("Tracked investment assets", money(profileInvestmentTotal(member)))}
         </div>
         ${assetHistoryChart(member.savingsInvestmentAccounts)}
@@ -1837,8 +2004,10 @@ function creditCardProfileCard(card, index) {
     <article class="profile-inventory-card">
       <div class="profile-inventory-grid">
         ${textField("Card / account", `financialInventory.creditCards.${index}.account`, card.account, false, "Account name")}
+        ${moneyField("Total balance", `financialInventory.creditCards.${index}.totalBalance`, card.totalBalance, false)}
+        ${moneyField("Last statement balance", `financialInventory.creditCards.${index}.lastStatementBalance`, card.lastStatementBalance, false)}
+        ${moneyField("Payment due", `financialInventory.creditCards.${index}.paymentDue`, card.paymentDue, false)}
         ${dateField("Due date", `financialInventory.creditCards.${index}.dueDate`, card.dueDate, false)}
-        ${moneyField("Current balance", `financialInventory.creditCards.${index}.amountDue`, card.amountDue, false)}
         ${percentField("Annual APR", `financialInventory.creditCards.${index}.apr`, card.apr, false)}
       </div>
       <div class="field promo-type-field">
@@ -1867,6 +2036,41 @@ function creditCardProfileCard(card, index) {
           : ""
       }
       <button class="icon-btn danger profile-remove" type="button" aria-label="Remove credit card" title="Remove credit card" data-remove-profile-item="creditCards.${index}">×</button>
+    </article>
+  `.replaceAll("data-path=", "data-profile-path=");
+}
+
+function mortgageProfileSection(account) {
+  const mortgage = account.financialInventory.mortgage;
+  const total = Number(mortgage.totalAmount) || 0;
+  const current = Number(mortgage.currentBalance) || 0;
+  const progress = total ? Math.min(100, Math.max(0, ((total - current) / total) * 100)) : 0;
+  return `
+    <section class="panel profile-inventory">
+      <div class="panel-heading"><div><h3>Mortgage profile</h3><p>Track the original mortgage and current payoff progress.</p></div></div>
+      <div class="panel-body">
+        <div class="profile-inventory-grid">
+          ${moneyField("Total mortgage amount", "financialInventory.mortgage.totalAmount", mortgage.totalAmount, false)}
+          ${percentField("Mortgage interest rate", "financialInventory.mortgage.interestRate", mortgage.interestRate, false)}
+          ${moneyField("Current mortgage balance", "financialInventory.mortgage.currentBalance", mortgage.currentBalance, false)}
+        </div>
+        <div class="savings-progress-block"><div class="savings-progress-copy"><strong>${money(Math.max(0, total - current))} paid</strong><span>${money(current)} remaining</span></div>${progressBar(progress, `${Math.round(progress)}% paid`)}</div>
+      </div>
+    </section>
+  `.replaceAll("data-path=", "data-profile-path=");
+}
+
+function studentLoanProfileCard(loan, index) {
+  return `
+    <article class="profile-inventory-card">
+      <div class="profile-inventory-grid">
+        ${textField("Loan name", `financialInventory.studentLoans.${index}.account`, loan.account, false, "Student loan name")}
+        ${moneyField("Balance", `financialInventory.studentLoans.${index}.totalOwed`, loan.totalOwed, false)}
+        ${percentField("Interest rate", `financialInventory.studentLoans.${index}.apr`, loan.apr, false)}
+        ${moneyField("Payment due", `financialInventory.studentLoans.${index}.paymentDue`, loan.paymentDue, false)}
+        ${dateField("Due date", `financialInventory.studentLoans.${index}.dueDate`, loan.dueDate, false)}
+      </div>
+      <button class="icon-btn danger profile-remove" type="button" aria-label="Remove student loan" title="Remove student loan" data-remove-profile-item="studentLoans.${index}">×</button>
     </article>
   `.replaceAll("data-path=", "data-profile-path=");
 }
@@ -2305,7 +2509,7 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
     .filter((bill) => bill.name && bill.coachDecision !== "this_check")
     .map((bill) => `${bill.name} (${money(bill.amount)})`);
   const calc = calculate(form);
-  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. During the session, they reviewed ${money(calc.thisCheck)} in paycheck income, ${money(calc.tithe)} in tithe, ${money(calc.totalBills)} in planned outflow, and ${money(calc.available)} remaining after the plan. ${paid.length ? `${paid.length} bill${paid.length === 1 ? " was" : "s were"} marked for payment from this check.` : "No bills were marked for payment from this check."} ${left.length ? `${left.length} bill${left.length === 1 ? " remains" : "s remain"} to be addressed during a future check.` : "No bills remain for follow-up."} Before the next session, the mentee should complete the assigned action steps and continue making progress toward savings, investment, and debt goals.`;
+  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. During the session, they reviewed ${money(calc.thisCheck)} in paycheck income, ${money(calc.tithe)} in tithe, ${money(calc.totalBills)} in planned outflow, and ${money(calc.available)} remaining after the plan. The plan includes ${money(calc.creditCards)} for credit-card payments, ${money(calc.studentLoanContributions)} for student loans, ${money(calc.debtContributions)} for other debts, and ${money(calc.savingsContribution)} for savings. ${paid.length ? `${paid.length} bill${paid.length === 1 ? " was" : "s were"} marked for payment from this check.` : "No bills were marked for payment from this check."} ${left.length ? `${left.length} bill${left.length === 1 ? " remains" : "s remain"} to be addressed during a future check.` : "No bills remain for follow-up."} Before the next session, the mentee should complete the assigned action steps and continue making progress toward savings, investment, and debt goals.`;
   return {
     id: uid("session"),
     formId: form.id,
@@ -2500,6 +2704,7 @@ function memberFormCard(form) {
       </div>
       <div class="button-row">
         <button class="btn btn-primary btn-small" type="button" data-open-form="${form.id}">Open</button>
+        <button class="btn btn-secondary btn-small" type="button" data-save-form="${form.id}">Save</button>
         ${currentAccount()?.coachEmail && currentAccount()?.coachRequestStatus === "approved" ? `<button class="btn btn-secondary btn-small" type="button" data-share-form="${form.id}"><span aria-hidden="true">↗</span> Send to coach</button>` : ""}
         <button class="btn btn-secondary btn-small" type="button" data-print-form="${form.id}">Print PDF</button>
         <button class="icon-btn danger" type="button" title="Delete form" aria-label="Delete form" data-delete-form="${form.id}">×</button>
@@ -2612,6 +2817,7 @@ function renderEditor() {
        <button class="btn btn-secondary" type="button" data-view="dashboard">Back to coach workspace</button>`
     : `
       ${account.coachEmail && account.coachRequestStatus === "approved" ? `<button class="btn btn-gold" type="button" data-share-form="${form.id}"><span aria-hidden="true">↗</span> Send to coach</button>` : ""}
+      <button class="btn btn-primary" type="button" data-save-form="${form.id}">Save form</button>
       <button class="btn btn-secondary" type="button" data-print-form="${form.id}">Print PDF</button>
       <button class="btn btn-primary" type="button" data-view="dashboard">Done</button>
     `;
@@ -2626,12 +2832,13 @@ function renderEditor() {
       <div class="editor-layout" style="margin-top: ${readOnly ? "16px" : "0"}">
         <div class="editor-main">
           ${overviewPanel(form, calc, readOnly)}
-          ${billsPanel(form, calc, readOnly, isCoachReview)}
           ${mortgagePanel(form, calc, readOnly)}
+          ${billsPanel(form, calc, readOnly, isCoachReview)}
           ${creditCardPanel(form, calc, readOnly, isCoachReview)}
           ${variablePanel(form, calc, readOnly)}
           ${savingsPanel(form, calc, readOnly)}
           ${debtPanel(form, calc, readOnly)}
+          ${studentLoanPanel(form, calc, readOnly)}
           ${notesPanel(form, readOnly)}
         </div>
         <aside class="editor-aside">
@@ -2646,6 +2853,7 @@ function renderEditor() {
               <a href="#spending">Budgeting</a>
               <a href="#savings">Savings</a>
               <a href="#debt">Debt</a>
+              <a href="#student-loans">Student loans</a>
               <a href="#notes">Notes</a>
             </nav>
           </div>
@@ -2680,9 +2888,6 @@ function overviewPanel(form, calc, readOnly) {
         ${moneyField("This check", "overview.thisCheck", form.data.overview.thisCheck, readOnly)}
         ${moneyField("Additional income", "overview.additionalIncome", form.data.overview.additionalIncome, readOnly)}
         ${computedField("Tithe (10%)", money(calc.tithe))}
-        ${computedField("Fixed bills subtotal", money(calc.fixedBills))}
-        ${computedField("Credit cards subtotal", money(calc.creditCards))}
-        ${computedField("Available after bills", money(calc.available), "available")}
       </div>
     </section>
   `;
@@ -2739,10 +2944,15 @@ function billGroup(form, key, label, readOnly, isCoachReview) {
 
 function mortgagePanel(form, calc, readOnly) {
   const mortgage = form.data.mortgage;
+  const total = Number(mortgage.totalAmount) || 0;
+  const progress = total ? Math.min(100, Math.max(0, ((total - calc.mortgageAfter) / total) * 100)) : 0;
   return `
     <section class="panel" id="mortgage">
       <div class="panel-heading"><div><h3>Mortgage / rent paydown tracker</h3><p>Track the amount reserved before the next due date</p></div></div>
       <div class="panel-body tracker-grid">
+        ${moneyField("Total mortgage amount", "mortgage.totalAmount", mortgage.totalAmount, readOnly)}
+        ${percentField("Mortgage interest rate", "mortgage.interestRate", mortgage.interestRate, readOnly)}
+        ${moneyField("Current mortgage balance", "mortgage.currentBalance", mortgage.currentBalance, readOnly)}
         ${moneyField("Payment amount", "mortgage.paymentAmount", mortgage.paymentAmount, readOnly)}
         ${dateField("Next due date", "mortgage.nextDueDate", mortgage.nextDueDate, readOnly)}
         ${dateField("Must pay by", "mortgage.mustPayBy", mortgage.mustPayBy, readOnly)}
@@ -2750,6 +2960,7 @@ function mortgagePanel(form, calc, readOnly) {
         ${moneyField("This check's contribution", "mortgage.contribution", mortgage.contribution, readOnly)}
         ${computedField("Remaining after this check", money(calc.mortgageAfter))}
       </div>
+      <div class="savings-progress-block">${progressBar(progress, `${Math.round(progress)}% of mortgage paid`)}</div>
     </section>
   `;
 }
@@ -2773,7 +2984,7 @@ function creditCardCard(row, index, readOnly, isCoachReview) {
   migratePromoCard(row);
   const remaining = Math.max(
     0,
-    (Number(row.amountDue) || 0) - (Number(row.contribution) || 0),
+    (Number(row.totalBalance) || 0) - (Number(row.contribution) || 0),
   );
   const purchasePromo = row.promoType === "purchases" || row.promoType === "both";
   const balancePromo = row.promoType === "balance_transfers" || row.promoType === "both";
@@ -2785,8 +2996,10 @@ function creditCardCard(row, index, readOnly, isCoachReview) {
       </div>
       <div class="debt-entry-grid">
         ${textField("Card / account", `creditCards.${index}.account`, row.account, readOnly, "Account name")}
+        ${moneyField("Total balance", `creditCards.${index}.totalBalance`, row.totalBalance, readOnly)}
+        ${moneyField("Last statement balance", `creditCards.${index}.lastStatementBalance`, row.lastStatementBalance, readOnly)}
+        ${moneyField("Payment due", `creditCards.${index}.paymentDue`, row.paymentDue, readOnly)}
         ${dateField("Due date", `creditCards.${index}.dueDate`, row.dueDate, readOnly)}
-        ${moneyField("Amount due / goal", `creditCards.${index}.amountDue`, row.amountDue, readOnly)}
         ${moneyField("This check's contribution", `creditCards.${index}.contribution`, row.contribution, readOnly)}
         ${percentField("Annual APR", `creditCards.${index}.apr`, row.apr, readOnly)}
         <div class="field"><label>Coach plan</label>${billDecisionControl(`creditCards.${index}.coachDecision`, row.coachDecision, isCoachReview)}</div>
@@ -2911,6 +3124,27 @@ function debtCard(row, index, readOnly) {
   `;
 }
 
+function studentLoanPanel(form, calc, readOnly) {
+  return `
+    <section class="panel" id="student-loans">
+      <div class="panel-heading"><div><h3>Student loans</h3><p>Plan payments while tracking each remaining balance.</p></div>${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="studentLoans"><span aria-hidden="true">＋</span> Add student loan</button>`}</div>
+      <div class="debt-card-list">${(form.data.studentLoans || []).map((loan, index) => studentLoanCard(loan, index, readOnly)).join("") || emptyInline("No student loans", "Add a student loan from the form or financial profile.")}</div>
+      <div class="table-total"><span>This check's student loan subtotal</span><strong>${money(calc.studentLoanContributions)}</strong></div>
+    </section>
+  `;
+}
+
+function studentLoanCard(loan, index, readOnly) {
+  return `<article class="debt-entry"><div class="debt-entry-heading"><strong>${escapeHtml(loan.account || "New student loan")}</strong>${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove student loan" aria-label="Remove student loan" data-remove-row="studentLoans.${index}">×</button>`}</div><div class="debt-entry-grid">
+    ${textField("Loan name", `studentLoans.${index}.account`, loan.account, readOnly, "Student loan name")}
+    ${moneyField("Balance", `studentLoans.${index}.totalOwed`, loan.totalOwed, readOnly)}
+    ${percentField("Interest rate", `studentLoans.${index}.apr`, loan.apr, readOnly)}
+    ${moneyField("Payment due", `studentLoans.${index}.paymentDue`, loan.paymentDue, readOnly)}
+    ${dateField("Due date", `studentLoans.${index}.dueDate`, loan.dueDate, readOnly)}
+    ${moneyField("This check's contribution", `studentLoans.${index}.contribution`, loan.contribution, readOnly)}
+  </div></article>`;
+}
+
 function notesPanel(form, readOnly) {
   return `
     <section class="panel" id="notes">
@@ -2934,6 +3168,7 @@ function summaryPanel(calc) {
         ${summaryRow("Fixed bills", money(calc.fixedBills))}
         ${summaryRow("Credit cards", money(calc.creditCards))}
         ${summaryRow("Debt contributions", money(calc.debtContributions))}
+        ${summaryRow("Student loan contributions", money(calc.studentLoanContributions))}
         ${summaryRow("Mortgage contribution", money(calc.mortgageContribution))}
         ${summaryRow("Savings contribution", money(calc.savingsContribution))}
         ${summaryRow("Budgeting", money(calc.variableBudget))}
@@ -3220,6 +3455,8 @@ function printWorksheetSummary(formId) {
   const savingsAccounts = member.savingsInvestmentAccounts.filter((item) => item.type === "savings");
   const investments = member.savingsInvestmentAccounts.filter((item) => item.type === "investment");
   const debts = form.data.debts.filter((debt) => debt.account);
+  const studentLoans = (form.data.studentLoans || []).filter((loan) => loan.account);
+  const cards = form.data.creditCards.filter((card) => card.account);
   const report = window.open("", "_blank");
   if (!report) {
     showToast("Allow pop-ups to open the printable PDF summary.");
@@ -3237,6 +3474,7 @@ function printWorksheetSummary(formId) {
       <div class="fact"><span>Assigned person</span><strong>${escapeHtml(form.assignedName || member.name)}</strong></div>
       <div class="fact"><span>Employer</span><strong>${escapeHtml(member.profile.employer || "Not provided")}</strong></div>
       <div class="fact"><span>Pay frequency</span><strong>${escapeHtml(member.profile.payFrequency || "Not provided")}</strong></div>
+      ${member.profile.spouseName ? `<div class="fact"><span>Spouse employer</span><strong>${escapeHtml(member.profile.spouseEmployer || "Not provided")}</strong></div><div class="fact"><span>Spouse Phone Number</span><strong>${escapeHtml(member.profile.spousePhone || "Not provided")}</strong></div><div class="fact"><span>Spouse pay frequency</span><strong>${escapeHtml(member.profile.spousePayFrequency || "Not provided")}</strong></div>` : ""}
       <div class="fact"><span>Check date</span><strong>${escapeHtml(dateLabel(form.data.overview.checkDate))}</strong></div>
       <div class="fact"><span>This check</span><strong>${money(calc.thisCheck)}</strong></div>
       <div class="fact"><span>Tithe</span><strong>${money(calc.tithe)}</strong></div>
@@ -3251,7 +3489,10 @@ function printWorksheetSummary(formId) {
       <div class="fact"><span>Investment assets</span><strong>${money(profileInvestmentTotal(member))}</strong></div>
     </div>
     <div class="two"><section class="section"><h2>Savings accounts</h2>${printList(savingsAccounts.map((item) => `${item.name || "Savings"} - ${money(item.balance)}`))}</section><section class="section"><h2>Investment accounts</h2>${printList(investments.map((item) => `${item.name || "Investment"} - ${money(item.balance)}`))}</section></div>
+    <h2>Mortgage</h2><div class="grid"><div class="fact"><span>Total mortgage amount</span><strong>${money(form.data.mortgage.totalAmount)}</strong></div><div class="fact"><span>Interest rate</span><strong>${escapeHtml(form.data.mortgage.interestRate || "Not provided")}${form.data.mortgage.interestRate ? "%" : ""}</strong></div><div class="fact"><span>Current balance</span><strong>${money(calc.mortgageAfter)}</strong></div></div>
     <section class="section"><h2>Remaining debt</h2>${printList(debts.map((debt) => `${debt.account} - ${money(debt.totalOwed)}${debt.apr ? ` at ${debt.apr}% APR` : ""}`))}</section>
+    <section class="section"><h2>Student loans</h2>${printList(studentLoans.map((loan) => `${loan.account} - ${money(loan.totalOwed)} balance; ${money(loan.paymentDue)} due${loan.dueDate ? ` on ${dateLabel(loan.dueDate)}` : ""}`))}</section>
+    <section class="section"><h2>Credit cards</h2>${printList(cards.map((card) => `${card.account} - ${money(card.totalBalance)} total balance; ${money(card.lastStatementBalance)} last statement; ${money(card.paymentDue)} due${card.dueDate ? ` on ${dateLabel(card.dueDate)}` : ""}`))}</section>
     <section class="section"><h2>Worksheet notes</h2><div class="note">${escapeHtml(form.data.notes || "No worksheet notes.")}</div></section>
     ${latestSession ? `<section class="page-break"><h2>Coach notes</h2><div class="note">${escapeHtml(latestSession.coachNotes || "No coach notes.")}</div><h2>F.I.T. session review</h2><div class="note">${escapeHtml(latestSession.aiSummary || "No session review.")}</div><h2>Next steps</h2><div class="note">${escapeHtml(latestSession.actionSteps || "No action steps recorded.")}</div></section>` : ""}
     <footer class="footer">F.I.T. was created by Pastor A. Griffith of God Cannot Lie Ministries.</footer>
@@ -3308,6 +3549,9 @@ function approveForm(formId, coachNotes = "", actionSteps = "") {
       ]),
     ),
     mortgage: {
+      totalAmount: form.data.mortgage.totalAmount,
+      interestRate: form.data.mortgage.interestRate,
+      currentBalance: String(calc.mortgageAfter || ""),
       paymentAmount: form.data.mortgage.paymentAmount,
       nextDueDate: form.data.mortgage.nextDueDate,
       mustPayBy: form.data.mortgage.mustPayBy,
@@ -3318,9 +3562,11 @@ function approveForm(formId, coachNotes = "", actionSteps = "") {
       .map((card) => ({
         account: card.account,
         dueDate: card.dueDate,
-        amountDue: String(
-          Math.max(0, (Number(card.amountDue) || 0) - (Number(card.contribution) || 0)),
+        totalBalance: String(
+          Math.max(0, (Number(card.totalBalance) || 0) - (Number(card.contribution) || 0)),
         ),
+        lastStatementBalance: card.lastStatementBalance || "",
+        paymentDue: card.paymentDue || "",
         apr: card.apr,
         promoType: card.promoType || "none",
         purchasePromoRate: card.purchasePromoRate || "",
@@ -3341,6 +3587,13 @@ function approveForm(formId, coachNotes = "", actionSteps = "") {
         ),
         contribution: "",
       })),
+    studentLoans: (form.data.studentLoans || [])
+      .filter((loan) => loan.account)
+      .map((loan) => ({
+        ...clone(loan),
+        totalOwed: String(Math.max(0, (Number(loan.totalOwed) || 0) - (Number(loan.contribution) || 0))),
+        contribution: "",
+      })),
   };
   member.financialInventory.recurringBills = billGroups.flatMap(([key]) =>
     form.data.bills[key]
@@ -3356,6 +3609,8 @@ function approveForm(formId, coachNotes = "", actionSteps = "") {
   );
   member.financialInventory.creditCards = clone(member.carryForward.creditCards || []);
   member.financialInventory.debts = clone(member.carryForward.debts || []);
+  member.financialInventory.studentLoans = clone(member.carryForward.studentLoans || []);
+  member.financialInventory.mortgage = clone(member.carryForward.mortgage || {});
   appState.sessions.push(createSessionReview(form, coach, coachNotes, actionSteps));
   saveState();
   activeFormId = null;
@@ -3621,6 +3876,7 @@ document.addEventListener("click", async (event) => {
     if (type === "recurringBills") account.financialInventory.recurringBills.push(blankRecurringBill());
     if (type === "creditCards") account.financialInventory.creditCards.push(blankProfileCard());
     if (type === "debts") account.financialInventory.debts.push(blankProfileDebt());
+    if (type === "studentLoans") account.financialInventory.studentLoans.push(blankStudentLoan());
     saveState();
     renderProfile();
     return;
@@ -3931,6 +4187,22 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const saveFormButton = event.target.closest("[data-save-form]");
+  if (saveFormButton) {
+    const form = appState.forms[saveFormButton.dataset.saveForm];
+    if (!form || form.ownerEmail !== currentAccount()?.email) return;
+    form.updatedAt = new Date().toISOString();
+    if (saveState()) {
+      try {
+        await productionBackend.saveNow?.(appState);
+        showToast("Form saved.");
+      } catch (error) {
+        showToast(error.message || "Form could not be saved.");
+      }
+    }
+    return;
+  }
+
   const deleteButton = event.target.closest("[data-delete-form]");
   if (deleteButton) {
     const form = appState.forms[deleteButton.dataset.deleteForm];
@@ -3952,6 +4224,7 @@ document.addEventListener("click", async (event) => {
     if (path === "creditCards") target.push(blankCreditCard());
     if (path === "variableSpending") target.push(blankVariable());
     if (path === "debts") target.push(blankDebt());
+    if (path === "studentLoans") target.push(blankStudentLoan());
     form.updatedAt = new Date().toISOString();
     saveState();
     renderEditor();
@@ -4231,6 +4504,9 @@ document.addEventListener("submit", async (event) => {
     account.profile.maritalStatus = data.get("maritalStatus");
     account.profile.spouseName =
       account.profile.maritalStatus === "married" ? data.get("spouseName").trim() : "";
+    account.profile.spouseEmployer = account.profile.maritalStatus === "married" ? String(data.get("spouseEmployer") || "").trim() : "";
+    account.profile.spousePhone = account.profile.maritalStatus === "married" ? String(data.get("spousePhone") || "").trim() : "";
+    account.profile.spousePayFrequency = account.profile.maritalStatus === "married" ? String(data.get("spousePayFrequency") || "") : "";
     if (account.profile.maritalStatus !== "married") account.spousePhoto = null;
     Object.values(appState.forms)
       .filter((form) => form.ownerEmail === account.email)
@@ -4380,22 +4656,13 @@ document.addEventListener("submit", async (event) => {
 document.addEventListener("input", (event) => {
   const assetInput = event.target.closest("[data-asset-path]");
   if (assetInput) {
-    const account = currentAccount();
-    const [index, field] = assetInput.dataset.assetPath.split(".");
-    account.savingsInvestmentAccounts[Number(index)][field] = assetInput.value;
-    if (field === "balance") saveAssetHistoryEntry(account, index);
-    saveFinancialProfileMutation(account);
-    refreshFinancialProfileSummary(account);
+    // Keep profile typing local to the input until change/blur or explicit Save.
     return;
   }
 
   const profileInput = event.target.closest("[data-profile-path]");
   if (profileInput) {
-    if (!validateControlledInput(profileInput)) return;
-    const account = currentAccount();
-    setAtPath(account, profileInput.dataset.profilePath, profileInput.value);
-    saveFinancialProfileMutation(account);
-    refreshFinancialProfileSummary(account);
+    validateControlledInput(profileInput);
     return;
   }
 
@@ -4408,8 +4675,15 @@ document.addEventListener("input", (event) => {
     applyRecurringBillSuggestion(input, form);
   }
   form.updatedAt = new Date().toISOString();
-  saveState();
   refreshLiveAvailable(form);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.target.matches("textarea")) return;
+  if (event.target.matches("[data-profile-path], [data-asset-path], [data-path]")) {
+    event.preventDefault();
+    event.target.blur();
+  }
 });
 
 document.addEventListener("change", async (event) => {
@@ -4600,10 +4874,9 @@ document.addEventListener("change", async (event) => {
 
   const maritalStatus = event.target.closest("#marital-status");
   if (maritalStatus) {
-    document.querySelector(".spouse-field")?.classList.toggle(
-      "hidden",
-      maritalStatus.value !== "married",
-    );
+    document.querySelectorAll(".spouse-field").forEach((field) => {
+      field.classList.toggle("hidden", maritalStatus.value !== "married");
+    });
     return;
   }
 
@@ -4639,7 +4912,7 @@ document.addEventListener("change", async (event) => {
   }
   form.updatedAt = new Date().toISOString();
   saveState();
-  renderEditor();
+  refreshLiveAvailable(form);
 });
 
 async function initializePortal() {
@@ -4667,6 +4940,8 @@ async function initializePortal() {
       showToast("The secure portal could not connect. Please try again.");
     }
   }
+  normalizeStateModels(appState);
+  if (currentAccount()) saveState();
   touchActivity();
   render();
 }
