@@ -287,6 +287,9 @@ function ensureAccountModel(account) {
 function normalizeStateModels(state) {
   Object.values(state.accounts || {}).forEach(ensureAccountModel);
   Object.values(state.forms || {}).forEach((form) => {
+    if (form.assignedPerson === "both") {
+      form.assignedName = formAssigneeName(state.accounts?.[form.ownerEmail], "both") || form.assignedName;
+    }
     form.data ||= {};
     form.data.bills ||= {};
     billGroups.forEach(([key]) => {
@@ -340,6 +343,25 @@ function profileIsComplete(account) {
       account.profile.maritalStatus &&
       (account.profile.maritalStatus !== "married" || account.profile.spouseName),
   );
+}
+
+function formAssigneeName(owner, assignedPerson = "account_holder") {
+  if (assignedPerson === "both" && owner?.profile?.spouseName) {
+    return `${owner.name} & ${owner.profile.spouseName}`;
+  }
+  if (assignedPerson === "spouse" && owner?.profile?.spouseName) {
+    return owner.profile.spouseName;
+  }
+  return owner?.name || "";
+}
+
+function formAssigneeAvatar(owner, assignedPerson = "account_holder", className = "") {
+  if (assignedPerson === "both" && owner?.profile?.spouseName) {
+    return `<span class="joint-avatar-stack ${className}">${avatarMarkup(owner)}${spouseAvatarMarkup(owner)}</span>`;
+  }
+  return assignedPerson === "spouse"
+    ? spouseAvatarMarkup(owner, className)
+    : avatarMarkup(owner, className);
 }
 
 function applyTheme() {
@@ -437,10 +459,7 @@ function syncDraftFormsWithFinancialProfile(account) {
     .filter((form) => form.ownerEmail === account.email && form.status === "draft")
     .forEach((form) => {
       form.ownerName = account.name;
-      form.assignedName =
-        form.assignedPerson === "spouse" && account.profile.spouseName
-          ? account.profile.spouseName
-          : account.name;
+      form.assignedName = formAssigneeName(account, form.assignedPerson);
       billGroups.forEach(([key]) => {
         const profileBills = account.financialInventory.recurringBills.filter(
           (bill) => bill.category === key,
@@ -513,10 +532,7 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
     approvedAt: null,
     approvedBy: null,
     assignedPerson,
-    assignedName:
-      assignedPerson === "spouse" && owner.profile.spouseName
-        ? owner.profile.spouseName
-        : owner.name,
+    assignedName: formAssigneeName(owner, assignedPerson),
     generatedFromProfile: true,
     data: {
       overview: { checkDate: "", thisCheck: "", additionalIncome: "" },
@@ -644,7 +660,10 @@ function loadState() {
       }
       Object.values(stored.forms).forEach((form) => {
         form.assignedPerson ||= "account_holder";
-        form.assignedName ||= form.ownerName;
+        form.assignedName =
+          form.assignedPerson === "both"
+            ? formAssigneeName(stored.accounts[form.ownerEmail], "both")
+            : form.assignedName || form.ownerName;
         form.generatedFromProfile = Object.hasOwn(form, "generatedFromProfile")
           ? Boolean(form.generatedFromProfile)
           : false;
@@ -3018,10 +3037,7 @@ function renderEditor() {
 
 function overviewPanel(form, calc, readOnly) {
   const owner = appState.accounts[form.ownerEmail];
-  const assignedAvatar =
-    form.assignedPerson === "spouse" && owner
-      ? spouseAvatarMarkup(owner, "avatar-lg")
-      : avatarMarkup(owner || form.ownerName, "avatar-lg");
+  const assignedAvatar = formAssigneeAvatar(owner || form.ownerName, form.assignedPerson, "avatar-lg");
   return `
     <section class="panel" id="overview">
       <div class="panel-heading">
@@ -3559,6 +3575,7 @@ function showNewFormModal() {
         <form id="new-form-assignment-form" class="form-stack">
           <label class="assignment-choice"><input type="radio" name="assignedPerson" value="account_holder" checked><span>${avatarMarkup(account)}<strong>${escapeHtml(account.name)}</strong><small>Account holder</small></span></label>
           <label class="assignment-choice"><input type="radio" name="assignedPerson" value="spouse"><span>${spouseAvatarMarkup(account)}<strong>${escapeHtml(account.profile.spouseName)}</strong><small>Spouse</small></span></label>
+          <label class="assignment-choice"><input type="radio" name="assignedPerson" value="both"><span>${formAssigneeAvatar(account, "both")}<strong>${escapeHtml(formAssigneeName(account, "both"))}</strong><small>Complete together</small></span></label>
           <button class="btn btn-primary" type="submit">Create assigned worksheet</button>
         </form>
       </div>
