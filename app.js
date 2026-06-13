@@ -18,6 +18,10 @@ let pendingVerificationEmail = null;
 let toastTimer = null;
 let pendingPaystubUpload = null;
 let formAutosaveTimer = null;
+let lastUserActivityAt = Date.now();
+let lastPresenceUpdateAt = 0;
+let inactivityLogoutInProgress = false;
+const INACTIVITY_LIMIT_MS = 15 * 60 * 1000;
 const urlParameters = new URLSearchParams(window.location.search);
 const inviteCoachFromUrl = urlParameters.get("coachInvite");
 const passwordResetFromUrl = urlParameters.get("passwordReset") === "1";
@@ -962,6 +966,9 @@ function activityBadge(account) {
 function touchActivity() {
   const account = currentAccount();
   if (!account) return;
+  const now = Date.now();
+  if (now - lastPresenceUpdateAt < 30 * 1000) return;
+  lastPresenceUpdateAt = now;
   account.lastActiveAt = new Date().toISOString();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
@@ -970,6 +977,46 @@ function touchActivity() {
   productionBackend.updatePresence?.(account.lastActiveAt).catch((error) => {
     console.warn("Could not update activity status", error);
   });
+}
+
+function recordUserActivity() {
+  lastUserActivityAt = Date.now();
+  touchActivity();
+}
+
+async function logoutDueToInactivity() {
+  if (inactivityLogoutInProgress || !currentAccount()) return;
+  inactivityLogoutInProgress = true;
+  clearTimeout(formAutosaveTimer);
+  try {
+    saveState();
+    await productionBackend.saveNow?.(appState);
+  } catch (error) {
+    console.warn("Could not save pending changes before inactivity logout", error);
+  }
+  try {
+    await productionBackend.updatePresence?.(null);
+    await productionBackend.signOut?.();
+  } catch (error) {
+    console.warn("Could not complete remote inactivity logout", error);
+  }
+  appState.sessionEmail = null;
+  activeView = "dashboard";
+  activeFormId = null;
+  pendingPaystubUpload = null;
+  loginMode = "signin";
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+  } catch {}
+  renderLogin();
+  showToast("You were logged out due to inactivity.");
+  inactivityLogoutInProgress = false;
+}
+
+function checkInactivityLogout() {
+  if (currentAccount() && Date.now() - lastUserActivityAt >= INACTIVITY_LIMIT_MS) {
+    logoutDueToInactivity();
+  }
 }
 
 async function completePendingCoachInvite() {
@@ -987,13 +1034,30 @@ async function completePendingCoachInvite() {
   showToast("Coach invitation accepted. You are now connected.");
 }
 
+function currencyValue(value) {
+  return Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+}
+
 function money(value) {
-  const number = Number(value) || 0;
+  const number = currencyValue(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(number);
+}
+
+function titheMoney(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
-  }).format(number);
+  }).format(Math.round(Number(value) || 0));
+}
+
+function moneyInputValue(value) {
+  return value === "" || value === null || value === undefined ? "" : currencyValue(value).toFixed(2);
 }
 
 function profileSavingsTotal(account) {
@@ -1178,55 +1242,58 @@ function getMemberCarryForward(account) {
 
 function calculate(form) {
   const data = form.data;
-  const thisCheck = Number(data.overview.thisCheck) || 0;
-  const additionalIncome = Number(data.overview.additionalIncome) || 0;
-  const tithe = thisCheck * 0.1;
-  const fixedBills = Object.values(data.bills)
+  const thisCheck = currencyValue(data.overview.thisCheck);
+  const additionalIncome = currencyValue(data.overview.additionalIncome);
+  const totalIncome = currencyValue(thisCheck + additionalIncome);
+  const tithe = Math.round(totalIncome * 0.1);
+  const fixedBills = currencyValue(Object.values(data.bills)
     .flat()
     .filter((item) => item.coachDecision !== "next_check")
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const creditCards = data.creditCards.reduce(
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+  const creditCards = currencyValue(data.creditCards.reduce(
     (sum, item) => sum + (item.coachDecision === "next_check" ? 0 : Number(item.contribution) || 0),
     0,
-  );
-  const debtContributions = data.debts.reduce(
+  ));
+  const debtContributions = currencyValue(data.debts.reduce(
     (sum, item) => sum + (Number(item.contribution) || 0),
     0,
-  );
-  const studentLoanContributions = (data.studentLoans || []).reduce(
+  ));
+  const studentLoanContributions = currencyValue((data.studentLoans || []).reduce(
     (sum, item) => sum + (Number(item.contribution) || 0),
     0,
-  );
-  const mortgageContribution = data.housingPaymentType === "mortgage" ? Number(data.mortgage.contribution) || 0 : 0;
-  const savingsContribution = Number(data.savings.contribution) || 0;
+  ));
+  const mortgageContribution = currencyValue(data.housingPaymentType === "mortgage" ? Number(data.mortgage.contribution) || 0 : 0);
+  const savingsContribution = currencyValue(data.savings.contribution);
   const totalDebt = [...data.debts, ...(data.studentLoans || [])].reduce(
     (sum, item) => sum + (Number(item.totalOwed) || 0),
     0,
   );
-  const savingsAfter =
-    (Number(data.savings.current) || 0) + (Number(data.savings.contribution) || 0);
-  const mortgageAfter = Math.max(
+  const savingsAfter = currencyValue(
+    (Number(data.savings.current) || 0) + (Number(data.savings.contribution) || 0),
+  );
+  const mortgageAfter = currencyValue(Math.max(
     0,
     (Number(data.mortgage.currentBalance || data.mortgage.remainingBefore) || 0) -
       (data.housingPaymentType === "mortgage" ? Number(data.mortgage.contribution) || 0 : 0),
-  );
-  const allocationTotal = (data.allocations || [])
+  ));
+  const allocationTotal = currencyValue((data.allocations || [])
     .filter((item) => item.type !== "mortgage" || data.housingPaymentType === "mortgage")
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const variableBudget = data.variableSpending.reduce(
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+  const variableBudget = currencyValue(data.variableSpending.reduce(
     (sum, item) => sum + (Number(item.budgeted) || 0),
     0,
-  );
-  const totalBills =
+  ));
+  const totalBills = currencyValue(
     fixedBills +
     creditCards +
     debtContributions +
     studentLoanContributions +
     mortgageContribution +
     savingsContribution +
-    variableBudget;
-  const totalPlanned = totalBills + allocationTotal;
-  const available = thisCheck + additionalIncome - tithe - totalPlanned;
+    variableBudget,
+  );
+  const totalPlanned = currencyValue(totalBills + allocationTotal);
+  const available = currencyValue(totalIncome - tithe - totalPlanned);
   const savingsGoal = Number(data.savings.goal) || 0;
   const savingsRemaining = Math.max(0, savingsGoal - savingsAfter);
   const savingsProgress = savingsGoal
@@ -1240,6 +1307,7 @@ function calculate(form) {
   return {
     thisCheck,
     additionalIncome,
+    totalIncome,
     tithe,
     fixedBills,
     creditCards,
@@ -1767,7 +1835,7 @@ function assetAccountCard(assetAccount, index) {
       </div>
       <div class="profile-inventory-grid">
         <div class="field"><label>Account name</label><input class="input" data-asset-path="${index}.name" value="${escapeHtml(assetAccount.name)}" placeholder="${typeLabel} account"></div>
-        <div class="field"><label>Current balance</label><div class="money-input-wrap"><input class="input" type="number" min="0" step="0.01" data-asset-path="${index}.balance" value="${assetAccount.balance}" placeholder="0.00"></div></div>
+        <div class="field"><label>Current balance</label><div class="money-input-wrap"><input class="input" type="number" min="0" step="0.01" data-asset-path="${index}.balance" value="${moneyInputValue(assetAccount.balance)}" placeholder="0.00"></div></div>
         <div class="field"><label>Date updated</label><input class="input" type="date" data-asset-path="${index}.updatedAt" value="${assetAccount.updatedAt || todayValue()}"></div>
         <div class="field"><label>Optional notes</label><input class="input" data-asset-path="${index}.notes" value="${escapeHtml(assetAccount.notes)}" placeholder="Purpose or goal"></div>
       </div>
@@ -2452,10 +2520,14 @@ function sessionReviewCard(session, viewer) {
         <p>${escapeHtml(polishReviewText(session.aiSummary))}</p>
       </section>
       <div class="session-review-grid">
-        ${sessionDetail("Coach feedback notes", session.coachNotes || "No additional coach notes submitted.")}
+        ${sessionDetail("Coach feedback notes", session.coachNotes || "N/A")}
         ${sessionDetail("Action steps before next session", session.actionSteps || "Continue following the approved worksheet.")}
-        ${sessionListDetail("Bills paid", session.billsPaid)}
-        ${sessionListDetail("Bills left to pay", session.billsLeft)}
+        ${sessionListDetail("Bills to Pay This Check", session.billsToPayThisCheck || session.billsPaid)}
+        ${sessionListDetail("Future Bills / Waiting for Next Check", session.futureBills || session.billsLeft)}
+        ${sessionListDetail("Remaining funds allocations", session.allocations)}
+        ${sessionListDetail("Savings withdrawals", session.savingsWithdrawals)}
+        ${sessionListDetail("Calculator summary", session.calculatorSummary)}
+        ${sessionDetail("Member notes", session.memberNotes || "N/A")}
       </div>
       <section class="feedback-thread">
         <strong>Member feedback and questions</strong>
@@ -2493,6 +2565,7 @@ function sessionDetail(label, value) {
 }
 
 function sessionListDetail(label, items = []) {
+  items = Array.isArray(items) ? items : [];
   return `<div class="session-detail"><span>${escapeHtml(label)}</span>${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : `<p>None recorded.</p>`}</div>`;
 }
 
@@ -2509,8 +2582,8 @@ function showSessionCompletionModal(formId) {
       <div class="modal-body">
         <p>Your original notes remain separate. The F.I.T. review will summarize these notes with the worksheet and bill decisions.</p>
         <form id="session-completion-form" class="form-stack">
-          <div class="field"><label for="coach-session-notes">Add notes for your mentee</label><textarea id="coach-session-notes" class="input notes-area compact-notes" name="coachNotes" required placeholder="Feedback, patterns noticed, and encouragement"></textarea></div>
-          <div class="field"><label for="session-action-steps">Action steps before the next session</label><textarea id="session-action-steps" class="input notes-area compact-notes" name="actionSteps" required placeholder="Specific next steps for the member"></textarea></div>
+          <div class="field"><label for="coach-session-notes">Add notes for your mentee (optional)</label><textarea id="coach-session-notes" class="input notes-area compact-notes" name="coachNotes" placeholder="Feedback, patterns noticed, and encouragement"></textarea></div>
+          <div class="field"><label for="session-action-steps">Action steps before the next session (optional)</label><textarea id="session-action-steps" class="input notes-area compact-notes" name="actionSteps" placeholder="Specific next steps for the member"></textarea></div>
           <button class="btn btn-gold" type="submit">Approve and complete F.I.T. session</button>
         </form>
       </div>
@@ -2530,7 +2603,19 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
     .filter((bill) => bill.name && bill.coachDecision !== "this_check")
     .map((bill) => `${bill.name} (${money(bill.amount)})`);
   const calc = calculate(form);
-  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. During the session, they reviewed ${money(calc.thisCheck)} in paycheck income, ${money(calc.tithe)} in tithe, ${money(calc.totalBills)} in planned outflow, and ${money(calc.available)} remaining after the plan. The plan includes ${money(calc.creditCards)} for credit-card payments, ${money(calc.studentLoanContributions)} for student loans, ${money(calc.debtContributions)} for other debts, and ${money(calc.savingsContribution)} for savings. ${paid.length ? `${paid.length} bill${paid.length === 1 ? " was" : "s were"} marked for payment from this check.` : "No bills were marked for payment from this check."} ${left.length ? `${left.length} bill${left.length === 1 ? " remains" : "s remain"} to be addressed during a future check.` : "No bills remain for follow-up."} Before the next session, the mentee should complete the assigned action steps and continue making progress toward savings, investment, and debt goals.`;
+  const allocations = (form.data.allocations || [])
+    .filter((item) => item.account || Number(item.amount))
+    .map((item) => `${item.account || item.type.replaceAll("_", " ")} (${money(item.amount)})`);
+  const savingsWithdrawals = appState.withdrawals
+    .filter((item) => item.formId === form.id)
+    .map((item) => `${item.savingsAccountName || "Savings"}: ${money(item.amount)} - ${item.reason}`);
+  const calculatorSummary = (form.data.calculatorHistory || [])
+    .slice(-5)
+    .map((item) => `${item.expression} = ${currencyValue(item.result).toFixed(2)}`);
+  const normalizedCoachNotes = coachNotes || "N/A";
+  const normalizedActionSteps = actionSteps || "N/A";
+  const memberNotes = form.data.notes || "N/A";
+  const aiSummary = `${form.assignedName || member.name} completed a F.I.T. paycheck-planning session with ${coach.name}. Total income for this check was ${money(calc.totalIncome)}, including ${money(calc.additionalIncome)} in additional income. The rounded tithe was ${titheMoney(calc.tithe)}, planned before bills and allocations. Bills to Pay This Check: ${paid.length ? paid.join("; ") : "none"}. Future Bills / Waiting for Next Check: ${left.length ? left.join("; ") : "none"}. Remaining funds allocations total ${money(calc.allocationTotal)}, leaving ${money(calc.available)} available. ${savingsWithdrawals.length ? `Savings withdrawals recorded: ${savingsWithdrawals.join("; ")}.` : "No savings withdrawals were recorded for this form."} Coach notes: ${normalizedCoachNotes}. Member notes: ${memberNotes}.`;
   return {
     id: uid("session"),
     formId: form.id,
@@ -2540,10 +2625,16 @@ function createSessionReview(form, coach, coachNotes, actionSteps) {
     memberEmail: member.email,
     memberName: member.name,
     assignedName: form.assignedName || member.name,
-    coachNotes,
-    actionSteps,
+    coachNotes: normalizedCoachNotes,
+    actionSteps: normalizedActionSteps,
     billsPaid: paid,
     billsLeft: left,
+    billsToPayThisCheck: paid,
+    futureBills: left,
+    allocations,
+    savingsWithdrawals,
+    calculatorSummary,
+    memberNotes,
     aiSummary,
     feedback: [],
   };
@@ -2749,7 +2840,7 @@ function coachFormCard(form) {
       <div class="coach-document-meta">
         <div><span>Check date</span><strong>${dateLabel(form.data.overview.checkDate)}</strong></div>
         <div><span>Amount paid</span><strong>${money(calc.thisCheck)}</strong></div>
-        <div><span>Tithe</span><strong>${money(calc.tithe)}</strong></div>
+        <div><span>Tithe</span><strong>${titheMoney(calc.tithe)}</strong></div>
       </div>
       <div class="button-row">
         <button class="btn btn-primary btn-small" type="button" data-open-form="${form.id}">${form.status === "approved" ? "View approved form" : "Review form"}</button>
@@ -2909,7 +3000,8 @@ function overviewPanel(form, calc, readOnly) {
         ${dateField("Check date", "overview.checkDate", form.data.overview.checkDate, readOnly)}
         ${moneyField("This check", "overview.thisCheck", form.data.overview.thisCheck, readOnly)}
         ${moneyField("Additional income", "overview.additionalIncome", form.data.overview.additionalIncome, readOnly)}
-        ${computedField("Tithe (10%)", money(calc.tithe))}
+        ${computedField("Total income", money(calc.totalIncome), "total-income")}
+        ${computedField("Tithe (10%)", titheMoney(calc.tithe), "tithe")}
       </div>
     </section>
   `;
@@ -2952,7 +3044,7 @@ function billGroup(form, key, label, readOnly, isCoachReview) {
               <tr>
                 <td><div class="bill-selector-wrap"><input class="table-input" list="${listId}" data-bill-suggestion="${key}.${index}" data-path="bills.${key}.${index}.name" value="${escapeHtml(row.name)}" placeholder="Choose or enter bill" ${readOnly ? "disabled" : ""}>${readOnly ? "" : `<button class="bill-selector-button" type="button" data-open-bill-selector aria-label="Open saved bill selector" title="Open saved bill selector">⌄</button>`}</div></td>
                 <td><input class="table-input" type="date" data-current-calendar data-path="bills.${key}.${index}.dueDate" value="${row.dueDate}" ${readOnly ? "disabled" : ""}></td>
-                <td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step="0.01" data-path="bills.${key}.${index}.amount" value="${row.amount}" placeholder="0" ${readOnly ? "disabled" : ""}></div></td>
+                <td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step="0.01" data-path="bills.${key}.${index}.amount" value="${moneyInputValue(row.amount)}" placeholder="0.00" ${readOnly ? "disabled" : ""}></div></td>
                 ${isCoachReview ? `<td>${billDecisionControl(`bills.${key}.${index}.coachDecision`, row.coachDecision, true)}</td>` : ""}
                 <td>${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove row" aria-label="Remove row" data-remove-row="bills.${key}.${index}">×</button>`}</td>
               </tr>
@@ -3070,7 +3162,7 @@ function variablePanel(form, calc, readOnly) {
             ${form.data.variableSpending.map((row, index) => `
               <tr>
                 <td><input class="table-input" data-path="variableSpending.${index}.category" value="${escapeHtml(row.category)}" placeholder="Category" ${readOnly ? "disabled" : ""}></td>
-                <td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step="0.01" data-path="variableSpending.${index}.budgeted" value="${row.budgeted}" placeholder="0" ${readOnly ? "disabled" : ""}></div></td>
+                <td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step="0.01" data-path="variableSpending.${index}.budgeted" value="${moneyInputValue(row.budgeted)}" placeholder="0.00" ${readOnly ? "disabled" : ""}></div></td>
                 <td>${readOnly ? "" : `<button class="icon-btn danger" type="button" title="Remove category" aria-label="Remove category" data-remove-row="variableSpending.${index}">×</button>`}</td>
               </tr>
             `).join("")}
@@ -3172,12 +3264,12 @@ function studentLoanCard(loan, index, readOnly) {
 }
 
 function allocationPanel(form, calc, readOnly) {
-  return `<section class="panel" id="allocations"><div class="panel-heading"><div><h3>Remaining funds allocation</h3><p>Direct leftover funds after the paycheck plan.</p></div>${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="allocations"><span aria-hidden="true">＋</span> Add allocation</button>`}</div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Allocate to</th><th>Account or goal</th><th>Amount</th><th></th></tr></thead><tbody>${(form.data.allocations || []).map((row,index)=>`<tr><td><select class="table-input" data-path="allocations.${index}.type" ${readOnly?"disabled":""}>${["savings","debt","credit_card","student_loan",...(form.data.housingPaymentType==="mortgage"?["mortgage"]:[])].map(type=>selectOption(type,type.replaceAll("_"," "),row.type)).join("")}</select></td><td><input class="table-input" data-path="allocations.${index}.account" value="${escapeHtml(row.account||"")}" ${readOnly?"disabled":""}></td><td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step=".01" data-path="allocations.${index}.amount" value="${row.amount||""}" ${readOnly?"disabled":""}></div></td><td>${readOnly?"":`<button class="icon-btn danger" type="button" data-remove-row="allocations.${index}">×</button>`}</td></tr>`).join("")}</tbody></table></div><div class="table-total"><span>Allocated from remaining funds</span><strong>${money(calc.allocationTotal)}</strong></div></section>`;
+  return `<section class="panel" id="allocations"><div class="panel-heading"><div><h3>Remaining funds allocation</h3><p>Direct leftover funds after the paycheck plan.</p></div>${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="allocations"><span aria-hidden="true">＋</span> Add allocation</button>`}</div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Allocate to</th><th>Account or goal</th><th>Amount</th><th></th></tr></thead><tbody>${(form.data.allocations || []).map((row,index)=>`<tr><td><select class="table-input" data-path="allocations.${index}.type" ${readOnly?"disabled":""}>${["savings","debt","credit_card","student_loan",...(form.data.housingPaymentType==="mortgage"?["mortgage"]:[])].map(type=>selectOption(type,type.replaceAll("_"," "),row.type)).join("")}</select></td><td><input class="table-input" data-path="allocations.${index}.account" value="${escapeHtml(row.account||"")}" ${readOnly?"disabled":""}></td><td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step=".01" data-path="allocations.${index}.amount" value="${moneyInputValue(row.amount)}" ${readOnly?"disabled":""}></div></td><td>${readOnly?"":`<button class="icon-btn danger" type="button" data-remove-row="allocations.${index}">×</button>`}</td></tr>`).join("")}</tbody></table></div><div class="table-total"><span>Allocated from remaining funds</span><strong>${money(calc.allocationTotal)}</strong></div></section>`;
 }
 
 function calculatorPanel(form, readOnly) {
   const history = (form.data.calculatorHistory || []).slice(-5).reverse();
-  return `<div class="summary-panel calculator-widget"><h3>Live calculator</h3><form data-calculator-form="${form.id}" class="calculator-form"><input class="input" name="expression" placeholder="Example: 1250 - 425" ${readOnly ? "disabled" : ""}><button class="btn btn-primary btn-small" type="submit" ${readOnly ? "disabled" : ""}>=</button></form><div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(String(item.result))}</strong></div>`).join("") : `<p class="quiet-message">No calculations yet.</p>`}</div></div>`;
+  return `<div class="summary-panel calculator-widget"><h3>Live calculator</h3><form data-calculator-form="${form.id}" class="calculator-form"><input class="input" name="expression" placeholder="Example: 1250 - 425" ${readOnly ? "disabled" : ""}><button class="btn btn-primary btn-small" type="submit" ${readOnly ? "disabled" : ""}>=</button></form><div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(currencyValue(item.result).toFixed(2))}</strong></div>`).join("") : `<p class="quiet-message">No calculations yet.</p>`}</div></div>`;
 }
 
 function notesPanel(form, readOnly) {
@@ -3199,7 +3291,8 @@ function summaryPanel(calc) {
       <div class="summary-list">
         ${summaryRow("This check", money(calc.thisCheck))}
         ${summaryRow("Additional income", money(calc.additionalIncome))}
-        ${summaryRow("Tithe (10%)", money(calc.tithe))}
+        ${summaryRow("Total income", money(calc.totalIncome), false, "total-income")}
+        ${summaryRow("Tithe (10%)", titheMoney(calc.tithe), false, "tithe")}
         ${summaryRow("Fixed bills", money(calc.fixedBills))}
         ${summaryRow("Credit cards", money(calc.creditCards))}
         ${summaryRow("Debt contributions", money(calc.debtContributions))}
@@ -3225,7 +3318,7 @@ function moneyField(label, path, value, readOnly) {
     <div class="field">
       <label>${label}</label>
       <div class="money-input-wrap">
-        <input class="input" type="number" min="0" step="0.01" data-path="${path}" value="${value}" placeholder="0.00" ${readOnly ? "disabled" : ""}>
+        <input class="input" type="number" min="0" step="0.01" data-path="${path}" value="${moneyInputValue(value)}" placeholder="0.00" ${readOnly ? "disabled" : ""}>
       </div>
     </div>
   `;
@@ -3333,9 +3426,15 @@ function applyRecurringBillSuggestion(input, form) {
 }
 
 function refreshLiveAvailable(form) {
-  const value = money(calculate(form).available);
+  const calc = calculate(form);
   document.querySelectorAll("[data-live-available]").forEach((element) => {
-    element.textContent = value;
+    element.textContent = money(calc.available);
+  });
+  document.querySelectorAll("[data-live-total-income]").forEach((element) => {
+    element.textContent = money(calc.totalIncome);
+  });
+  document.querySelectorAll("[data-live-tithe]").forEach((element) => {
+    element.textContent = titheMoney(calc.tithe);
   });
 }
 
@@ -3354,6 +3453,19 @@ function validateControlledInput(input) {
     return valid;
   }
   return true;
+}
+
+function normalizeCurrencyInput(input) {
+  if (
+    input?.type !== "number" ||
+    input.matches("[data-percent-validation]") ||
+    input.value === "" ||
+    !Number.isFinite(Number(input.value))
+  ) {
+    return;
+  }
+  const step = String(input.getAttribute("step") || "");
+  if (step === ".01" || step === "0.01") input.value = currencyValue(input.value).toFixed(2);
 }
 
 function saveAssetHistoryEntry(account, index) {
@@ -3493,6 +3605,12 @@ function printWorksheetSummary(formId) {
   const debts = form.data.debts.filter((debt) => debt.account);
   const studentLoans = (form.data.studentLoans || []).filter((loan) => loan.account);
   const cards = form.data.creditCards.filter((card) => card.account);
+  const allocations = (form.data.allocations || [])
+    .filter((item) => item.account || Number(item.amount))
+    .map((item) => `${item.account || item.type.replaceAll("_", " ")} - ${money(item.amount)}`);
+  const savingsWithdrawals = appState.withdrawals
+    .filter((item) => item.formId === form.id)
+    .map((item) => `${item.savingsAccountName || "Savings"} - ${money(item.amount)}: ${item.reason}`);
   const report = window.open("", "_blank");
   if (!report) {
     showToast("Allow pop-ups to open the printable PDF summary.");
@@ -3513,24 +3631,27 @@ function printWorksheetSummary(formId) {
       ${member.profile.spouseName ? `<div class="fact"><span>Spouse employer</span><strong>${escapeHtml(member.profile.spouseEmployer || "Not provided")}</strong></div><div class="fact"><span>Spouse Phone Number</span><strong>${escapeHtml(member.profile.spousePhone || "Not provided")}</strong></div><div class="fact"><span>Spouse pay frequency</span><strong>${escapeHtml(member.profile.spousePayFrequency || "Not provided")}</strong></div>` : ""}
       <div class="fact"><span>Check date</span><strong>${escapeHtml(dateLabel(form.data.overview.checkDate))}</strong></div>
       <div class="fact"><span>This check</span><strong>${money(calc.thisCheck)}</strong></div>
-      <div class="fact"><span>Tithe</span><strong>${money(calc.tithe)}</strong></div>
+      <div class="fact"><span>Additional income</span><strong>${money(calc.additionalIncome)}</strong></div>
+      <div class="fact"><span>Total income</span><strong>${money(calc.totalIncome)}</strong></div>
+      <div class="fact"><span>Tithe</span><strong>${titheMoney(calc.tithe)}</strong></div>
       <div class="fact"><span>Planned outflow</span><strong>${money(calc.totalBills)}</strong></div>
       <div class="fact"><span>Available after plan</span><strong>${money(calc.available)}</strong></div>
       <div class="fact"><span>Remaining debt</span><strong>${money(calc.totalDebt)}</strong></div>
     </div>
-    <div class="two"><section class="section"><h2>Bills paid</h2>${printList(billsPaid)}</section><section class="section"><h2>Bills remaining</h2>${printList(billsRemaining)}</section></div>
+    <div class="two"><section class="section"><h2>Bills to Pay This Check</h2>${printList(billsPaid)}</section><section class="section"><h2>Future Bills / Waiting for Next Check</h2>${printList(billsRemaining)}</section></div>
+    <div class="two"><section class="section"><h2>Remaining funds allocations</h2>${printList(allocations)}</section><section class="section"><h2>Savings withdrawals</h2>${printList(savingsWithdrawals)}</section></div>
     <h2>Savings and assets</h2><div class="grid">
       <div class="fact"><span>Worksheet savings</span><strong>${money(calc.savingsAfter)}</strong></div>
       <div class="fact"><span>Profile savings</span><strong>${money(profileSavingsTotal(member))}</strong></div>
       <div class="fact"><span>Investment assets</span><strong>${money(profileInvestmentTotal(member))}</strong></div>
     </div>
     <div class="two"><section class="section"><h2>Savings accounts</h2>${printList(savingsAccounts.map((item) => `${item.name || "Savings"} - ${money(item.balance)}`))}</section><section class="section"><h2>Investment accounts</h2>${printList(investments.map((item) => `${item.name || "Investment"} - ${money(item.balance)}`))}</section></div>
-    <h2>Mortgage</h2><div class="grid"><div class="fact"><span>Total mortgage amount</span><strong>${money(form.data.mortgage.totalAmount)}</strong></div><div class="fact"><span>Interest rate</span><strong>${escapeHtml(form.data.mortgage.interestRate || "Not provided")}${form.data.mortgage.interestRate ? "%" : ""}</strong></div><div class="fact"><span>Current balance</span><strong>${money(calc.mortgageAfter)}</strong></div></div>
+    ${form.data.housingPaymentType === "mortgage" ? `<h2>Mortgage progress</h2><div class="grid"><div class="fact"><span>Total mortgage amount</span><strong>${money(form.data.mortgage.totalAmount)}</strong></div><div class="fact"><span>Interest rate</span><strong>${escapeHtml(form.data.mortgage.interestRate || "Not provided")}${form.data.mortgage.interestRate ? "%" : ""}</strong></div><div class="fact"><span>Current balance</span><strong>${money(calc.mortgageAfter)}</strong></div></div>` : `<h2>Housing</h2><p>Rent selected. Mortgage calculations are excluded from this report.</p>`}
     <section class="section"><h2>Remaining debt</h2>${printList(debts.map((debt) => `${debt.account} - ${money(debt.totalOwed)}${debt.apr ? ` at ${debt.apr}% APR` : ""}`))}</section>
     <section class="section"><h2>Student loans</h2>${printList(studentLoans.map((loan) => `${loan.account} - ${money(loan.totalOwed)} balance; ${money(loan.paymentDue)} due${loan.dueDate ? ` on ${dateLabel(loan.dueDate)}` : ""}`))}</section>
     <section class="section"><h2>Credit cards</h2>${printList(cards.map((card) => `${card.account} - ${money(card.totalBalance)} total balance; ${money(card.lastStatementBalance)} last statement; ${money(card.paymentDue)} due${card.dueDate ? ` on ${dateLabel(card.dueDate)}` : ""}`))}</section>
     <section class="section"><h2>Worksheet notes</h2><div class="note">${escapeHtml(form.data.notes || "No worksheet notes.")}</div></section>
-    ${latestSession ? `<section class="page-break"><h2>Coach notes</h2><div class="note">${escapeHtml(latestSession.coachNotes || "No coach notes.")}</div><h2>F.I.T. session review</h2><div class="note">${escapeHtml(latestSession.aiSummary || "No session review.")}</div><h2>Next steps</h2><div class="note">${escapeHtml(latestSession.actionSteps || "No action steps recorded.")}</div></section>` : ""}
+    ${latestSession ? `<section class="page-break"><h2>Coach notes</h2><div class="note">${escapeHtml(latestSession.coachNotes || "N/A")}</div><h2>F.I.T. session review</h2><div class="note">${escapeHtml(latestSession.aiSummary || "No session review.")}</div><h2>Next steps</h2><div class="note">${escapeHtml(latestSession.actionSteps || "No action steps recorded.")}</div></section>` : ""}
     <footer class="footer">F.I.T. was created by Pastor A. Griffith of God Cannot Lie Ministries.</footer>
     <script>window.addEventListener("load",()=>setTimeout(()=>window.print(),300));<\/script></body></html>`);
   report.document.close();
@@ -4744,6 +4865,7 @@ document.addEventListener("submit", async (event) => {
     };
     appState.withdrawals.push({
       id: uid("withdrawal"),
+      formId: form.id,
       memberEmail: member.email,
       coachEmail: member.coachEmail,
       amount,
@@ -4823,6 +4945,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("change", async (event) => {
+  normalizeCurrencyInput(event.target);
   const assetInput = event.target.closest("[data-asset-path]");
   if (assetInput) {
     const account = currentAccount();
@@ -5140,13 +5263,24 @@ async function validateCurrentAccount() {
 
 initializePortal();
 setInterval(() => {
-  touchActivity();
+  checkInactivityLogout();
   validateCurrentAccount();
 }, 15 * 1000);
 setInterval(() => {
   if (!document.activeElement?.matches("input, textarea, select")) refreshPortalFromBackend();
 }, 5 * 1000);
-window.addEventListener("focus", validateCurrentAccount);
+["mousemove", "mousedown", "keydown", "scroll", "touchstart", "pointerdown"].forEach((eventName) => {
+  document.addEventListener(eventName, recordUserActivity, { passive: true });
+});
+window.addEventListener("focus", () => {
+  checkInactivityLogout();
+  if (currentAccount()) recordUserActivity();
+  validateCurrentAccount();
+});
+window.addEventListener("popstate", recordUserActivity);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") validateCurrentAccount();
+  if (document.visibilityState === "visible") {
+    checkInactivityLogout();
+    validateCurrentAccount();
+  }
 });
