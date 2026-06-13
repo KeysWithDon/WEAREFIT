@@ -3745,7 +3745,8 @@ function fileDataUrl(file) {
 }
 
 async function saveUploadedProfilePhoto(account, field, file, uploaded) {
-  account[field] = {
+  const activeAccount = appState.accounts[account.email] || account;
+  activeAccount[field] = {
     name: file.name,
     type: file.type,
     size: file.size,
@@ -3756,6 +3757,46 @@ async function saveUploadedProfilePhoto(account, field, file, uploaded) {
     await productionBackend.saveNow(appState);
   } else if (!saveState()) {
     throw new Error("The photo could not be saved.");
+  }
+}
+
+let profilePhotoUpdateInProgress = false;
+
+async function updateProfilePhoto(input, field, category, label) {
+  const account = currentAccount();
+  if (!account || !input?.files?.[0]) return;
+  const previousPhoto = account[field] ? clone(account[field]) : null;
+  let file;
+  profilePhotoUpdateInProgress = true;
+  try {
+    showToast(`Preparing ${label.toLowerCase()}...`);
+    file = await prepareProfilePhoto(input.files[0]);
+    const previewUrl = await fileDataUrl(file);
+    account[field] = {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      uploadedAt: new Date().toISOString(),
+      dataUrl: previewUrl,
+    };
+    renderProfile();
+
+    if (productionBackend.enabled) {
+      const uploaded = await productionBackend.uploadPrivateFile("profile-photos", file, category);
+      await saveUploadedProfilePhoto(account, field, file, uploaded);
+    } else {
+      await saveUploadedProfilePhoto(account, field, file, { dataUrl: previewUrl });
+    }
+    renderProfile();
+    showToast(`${label} securely updated.`);
+  } catch (error) {
+    const activeAccount = appState.accounts[account.email] || account;
+    activeAccount[field] = previousPhoto;
+    renderProfile();
+    showToast(error.message || `${label} upload failed.`);
+  } finally {
+    profilePhotoUpdateInProgress = false;
+    input.value = "";
   }
 }
 
@@ -5544,89 +5585,13 @@ document.addEventListener("change", async (event) => {
 
   const profilePhotoInput = event.target.closest("[data-profile-photo-upload]");
   if (profilePhotoInput?.files?.[0]) {
-    let file;
-    try {
-      showToast("Preparing profile photo...");
-      file = await prepareProfilePhoto(profilePhotoInput.files[0]);
-    } catch (error) {
-      profilePhotoInput.value = "";
-      showToast(error.message || "Profile photo could not be prepared.");
-      return;
-    }
-    if (productionBackend.enabled) {
-      try {
-        const uploaded = await productionBackend.uploadPrivateFile(
-          "profile-photos",
-          file,
-          "account-holder",
-        );
-        const account = currentAccount();
-        await saveUploadedProfilePhoto(account, "profilePhoto", file, uploaded);
-        renderProfile();
-        showToast("Profile photo securely updated.");
-      } catch (error) {
-        profilePhotoInput.value = "";
-        showToast(error.message || "Profile photo upload failed.");
-      }
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const account = currentAccount();
-      try {
-        await saveUploadedProfilePhoto(account, "profilePhoto", file, { dataUrl: reader.result });
-        renderProfile();
-        showToast("Profile photo updated");
-      } catch (error) {
-        showToast(error.message || "Profile photo could not be saved.");
-      }
-    };
-    reader.readAsDataURL(file);
-    profilePhotoInput.value = "";
+    await updateProfilePhoto(profilePhotoInput, "profilePhoto", "account-holder", "Profile photo");
     return;
   }
 
   const spousePhotoInput = event.target.closest("[data-spouse-photo-upload]");
   if (spousePhotoInput?.files?.[0]) {
-    let file;
-    try {
-      showToast("Preparing spouse photo...");
-      file = await prepareProfilePhoto(spousePhotoInput.files[0]);
-    } catch (error) {
-      spousePhotoInput.value = "";
-      showToast(error.message || "Spouse photo could not be prepared.");
-      return;
-    }
-    if (productionBackend.enabled) {
-      try {
-        const uploaded = await productionBackend.uploadPrivateFile(
-          "profile-photos",
-          file,
-          "spouse",
-        );
-        const account = currentAccount();
-        await saveUploadedProfilePhoto(account, "spousePhoto", file, uploaded);
-        renderProfile();
-        showToast("Spouse photo securely updated.");
-      } catch (error) {
-        spousePhotoInput.value = "";
-        showToast(error.message || "Spouse photo upload failed.");
-      }
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const account = currentAccount();
-      try {
-        await saveUploadedProfilePhoto(account, "spousePhoto", file, { dataUrl: reader.result });
-        renderProfile();
-        showToast("Spouse photo updated");
-      } catch (error) {
-        showToast(error.message || "Spouse photo could not be saved.");
-      }
-    };
-    reader.readAsDataURL(file);
-    spousePhotoInput.value = "";
+    await updateProfilePhoto(spousePhotoInput, "spousePhoto", "spouse", "Spouse photo");
     return;
   }
 
@@ -5730,7 +5695,12 @@ async function initializePortal() {
 
 let portalRefreshInProgress = false;
 async function refreshPortalFromBackend() {
-  if (!productionBackend.enabled || portalRefreshInProgress || !currentAccount()) return;
+  if (
+    !productionBackend.enabled ||
+    portalRefreshInProgress ||
+    profilePhotoUpdateInProgress ||
+    !currentAccount()
+  ) return;
   portalRefreshInProgress = true;
   try {
     const hydrated = await productionBackend.hydrate();
