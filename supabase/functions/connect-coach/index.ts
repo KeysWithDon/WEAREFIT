@@ -33,7 +33,7 @@ Deno.serve(async (request) => {
     }
     const { data: coachRow, error: coachError } = await adminClient
       .from("portal_states")
-      .select("owner_email, state")
+      .select("owner_id, owner_email, state")
       .eq("owner_email", coachEmail)
       .eq("role", "coach")
       .maybeSingle();
@@ -45,6 +45,10 @@ Deno.serve(async (request) => {
       .eq("email", coachEmail)
       .maybeSingle();
     if (coachProfileError) throw coachProfileError;
+    const { data: coachAuthData, error: coachAuthError } = await adminClient.auth.admin.getUserById(
+      coachRow.owner_id
+    );
+    if (coachAuthError) throw coachAuthError;
 
     const memberEmail = authData.user.email.toLowerCase();
     const { data: memberRow, error: memberError } = await adminClient
@@ -62,9 +66,11 @@ Deno.serve(async (request) => {
     }
     const profileName = String(coachProfile?.full_name || "").trim();
     const stateName = String(coachAccount.name || "").trim();
+    const metadataName = String(coachAuthData.user?.user_metadata?.name || "").trim();
     const coachName =
       (profileName && profileName.toLowerCase() !== coachEmail ? profileName : "") ||
       (stateName && stateName.toLowerCase() !== coachEmail ? stateName : "") ||
+      (metadataName && metadataName.toLowerCase() !== coachEmail ? metadataName : "") ||
       "F.I.T. coach";
     member.coachEmail = coachEmail;
     member.coachName = coachName;
