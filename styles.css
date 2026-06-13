@@ -4157,15 +4157,27 @@ html[data-theme="dark"] .onboarding-banner strong {
 }
 
 .draggable-calculator .calculator-key {
-  width: 100%;
-  height: clamp(30px, min(18cqw, 11cqh), 62px);
+  --calculator-key-size: clamp(30px, min(18cqw, 11cqh), 62px);
+  width: var(--calculator-key-size);
+  height: var(--calculator-key-size);
   min-height: 0;
-  aspect-ratio: auto;
+  aspect-ratio: 1;
+  justify-self: center;
+  border-radius: 50%;
+  padding: 0;
   font-size: clamp(13px, min(7cqw, 5cqh), 21px);
   transition:
     height 0.12s ease,
     font-size 0.12s ease,
     filter 0.12s ease;
+}
+
+.draggable-calculator .calculator-key.wide {
+  width: 100%;
+  max-width: calc((var(--calculator-key-size) * 2) + clamp(3px, 2cqw, 8px));
+  aspect-ratio: auto;
+  border-radius: 999px;
+  padding-left: 24%;
 }
 
 .draggable-calculator .calculator-history {
