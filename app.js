@@ -17,6 +17,7 @@ let loginMode = "signin";
 let pendingVerificationEmail = null;
 let toastTimer = null;
 let pendingPaystubUpload = null;
+let formAutosaveTimer = null;
 const urlParameters = new URLSearchParams(window.location.search);
 const inviteCoachFromUrl = urlParameters.get("coachInvite");
 const passwordResetFromUrl = urlParameters.get("passwordReset") === "1";
@@ -211,6 +212,7 @@ function ensureFinancialInventory(account) {
   account.financialInventory.debts ||= [];
   account.financialInventory.studentLoans ||= [];
   account.financialInventory.mortgage ||= {};
+  account.financialInventory.housingPaymentType ||= "mortgage";
   account.financialInventory.recurringBills = removePartialNameDuplicates(account.financialInventory.recurringBills, "name");
   account.financialInventory.creditCards = removePartialNameDuplicates(account.financialInventory.creditCards, "account");
   account.financialInventory.debts = removePartialNameDuplicates(account.financialInventory.debts, "account");
@@ -295,6 +297,9 @@ function normalizeStateModels(state) {
     form.data.debts = removePartialNameDuplicates(form.data.debts || [], "account").map((debt) => ({ ...blankDebt(), ...debt }));
     form.data.studentLoans = removePartialNameDuplicates(form.data.studentLoans || [], "account").map((loan) => ({ ...blankStudentLoan(), ...loan }));
     form.data.mortgage = { totalAmount: "", interestRate: "", currentBalance: "", paymentAmount: "", nextDueDate: "", mustPayBy: "", remainingBefore: "", contribution: "", ...(form.data.mortgage || {}) };
+    form.data.housingPaymentType ||= "mortgage";
+    form.data.calculatorHistory ||= [];
+    form.data.allocations ||= [];
     form.data.variableSpending ||= [];
     form.data.savings ||= { goal: "", current: "", contribution: "" };
     form.data.overview ||= { checkDate: "", thisCheck: "", additionalIncome: "" };
@@ -466,6 +471,7 @@ function syncDraftFormsWithFinancialProfile(account) {
         interestRate: account.financialInventory.mortgage.interestRate || form.data.mortgage.interestRate || "",
         currentBalance: account.financialInventory.mortgage.currentBalance || form.data.mortgage.currentBalance || "",
       };
+      form.data.housingPaymentType = account.financialInventory.housingPaymentType || "mortgage";
       form.generatedFromProfile = true;
       form.updatedAt = new Date().toISOString();
     });
@@ -537,6 +543,7 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
         remainingBefore: carryForward.mortgage?.remainingBefore || "",
         contribution: "",
       },
+      housingPaymentType: inventory.housingPaymentType || "mortgage",
       creditCards: sourceCards?.length
         ? clone(sourceCards).map((card) => {
             const nextCard = {
@@ -565,6 +572,8 @@ function blankForm(owner, carryForward = owner.carryForward || {}, assignedPerso
       studentLoans: inventory.studentLoans?.length
         ? clone(inventory.studentLoans).map((loan) => ({ ...blankStudentLoan(), ...loan, contribution: loan.paymentDue || "" }))
         : [],
+      calculatorHistory: [],
+      allocations: [],
       notes: "",
     },
   };
@@ -1174,9 +1183,10 @@ function calculate(form) {
   const tithe = thisCheck * 0.1;
   const fixedBills = Object.values(data.bills)
     .flat()
+    .filter((item) => item.coachDecision !== "next_check")
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const creditCards = data.creditCards.reduce(
-    (sum, item) => sum + (Number(item.contribution) || 0),
+    (sum, item) => sum + (item.coachDecision === "next_check" ? 0 : Number(item.contribution) || 0),
     0,
   );
   const debtContributions = data.debts.reduce(
@@ -1187,7 +1197,7 @@ function calculate(form) {
     (sum, item) => sum + (Number(item.contribution) || 0),
     0,
   );
-  const mortgageContribution = Number(data.mortgage.contribution) || 0;
+  const mortgageContribution = data.housingPaymentType === "mortgage" ? Number(data.mortgage.contribution) || 0 : 0;
   const savingsContribution = Number(data.savings.contribution) || 0;
   const totalDebt = [...data.debts, ...(data.studentLoans || [])].reduce(
     (sum, item) => sum + (Number(item.totalOwed) || 0),
@@ -1198,8 +1208,11 @@ function calculate(form) {
   const mortgageAfter = Math.max(
     0,
     (Number(data.mortgage.currentBalance || data.mortgage.remainingBefore) || 0) -
-      (Number(data.mortgage.contribution) || 0),
+      (data.housingPaymentType === "mortgage" ? Number(data.mortgage.contribution) || 0 : 0),
   );
+  const allocationTotal = (data.allocations || [])
+    .filter((item) => item.type !== "mortgage" || data.housingPaymentType === "mortgage")
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const variableBudget = data.variableSpending.reduce(
     (sum, item) => sum + (Number(item.budgeted) || 0),
     0,
@@ -1212,7 +1225,8 @@ function calculate(form) {
     mortgageContribution +
     savingsContribution +
     variableBudget;
-  const available = thisCheck + additionalIncome - tithe - totalBills;
+  const totalPlanned = totalBills + allocationTotal;
+  const available = thisCheck + additionalIncome - tithe - totalPlanned;
   const savingsGoal = Number(data.savings.goal) || 0;
   const savingsRemaining = Math.max(0, savingsGoal - savingsAfter);
   const savingsProgress = savingsGoal
@@ -1234,6 +1248,8 @@ function calculate(form) {
     mortgageContribution,
     savingsContribution,
     totalBills,
+    totalPlanned,
+    allocationTotal,
     available,
     totalDebt,
     savingsAfter,
@@ -1756,6 +1772,7 @@ function assetAccountCard(assetAccount, index) {
         <div class="field"><label>Optional notes</label><input class="input" data-asset-path="${index}.notes" value="${escapeHtml(assetAccount.notes)}" placeholder="Purpose or goal"></div>
       </div>
       <div class="entry-footer"><span class="badge ${assetAccount.type === "investment" ? "" : "green"}">${typeLabel}</span><span>${assetAccount.history.length} historical update${assetAccount.history.length === 1 ? "" : "s"}</span></div>
+      ${assetAccount.type === "savings" ? `<button class="btn btn-secondary btn-small" type="button" data-withdraw-profile-savings="${index}">Record withdrawal</button>` : ""}
       <button class="icon-btn danger profile-remove" type="button" aria-label="Remove tracked account" title="Remove tracked account" data-remove-asset-account="${index}">×</button>
     </article>
   `;
@@ -2049,12 +2066,16 @@ function mortgageProfileSection(account) {
     <section class="panel profile-inventory">
       <div class="panel-heading"><div><h3>Mortgage profile</h3><p>Track the original mortgage and current payoff progress.</p></div></div>
       <div class="panel-body">
+        <div class="asset-type-choice"><button class="type-choice ${account.financialInventory.housingPaymentType === "mortgage" ? "active" : ""}" type="button" data-profile-housing-type="mortgage">Mortgage</button><button class="type-choice ${account.financialInventory.housingPaymentType === "rent" ? "active" : ""}" type="button" data-profile-housing-type="rent">Rent</button></div>
+        ${account.financialInventory.housingPaymentType === "rent" ? `<p class="quiet-message">Mortgage details are preserved but excluded from new forms while Rent is selected.</p>` : ""}
+        <div class="${account.financialInventory.housingPaymentType === "rent" ? "hidden" : ""}">
         <div class="profile-inventory-grid">
           ${moneyField("Total mortgage amount", "financialInventory.mortgage.totalAmount", mortgage.totalAmount, false)}
           ${percentField("Mortgage interest rate", "financialInventory.mortgage.interestRate", mortgage.interestRate, false)}
           ${moneyField("Current mortgage balance", "financialInventory.mortgage.currentBalance", mortgage.currentBalance, false)}
         </div>
         <div class="savings-progress-block"><div class="savings-progress-copy"><strong>${money(Math.max(0, total - current))} paid</strong><span>${money(current)} remaining</span></div>${progressBar(progress, `${Math.round(progress)}% paid`)}</div>
+        </div>
       </div>
     </section>
   `.replaceAll("data-path=", "data-profile-path=");
@@ -2478,7 +2499,7 @@ function sessionListDetail(label, items = []) {
 function showSessionCompletionModal(formId) {
   const form = appState.forms[formId];
   const coach = currentAccount();
-  if (!form || coach.role !== "coach" || !form.sharedWith.includes(coach.email)) return;
+  if (!form || coach.role !== "coach" || appState.accounts[form.ownerEmail]?.coachEmail !== coach.email) return;
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.dataset.formId = formId;
@@ -2535,9 +2556,9 @@ function renderDashboard() {
 
   if (isCoach) {
     const sharedForms = Object.values(appState.forms)
-      .filter((form) => form.sharedWith.includes(account.email))
+      .filter((form) => appState.accounts[form.ownerEmail]?.coachEmail === account.email)
       .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    const reviewForms = sharedForms.filter((form) => form.status === "submitted");
+    const reviewForms = sharedForms.filter((form) => form.status !== "approved");
     const approvedForms = sharedForms.filter((form) => form.status === "approved");
     const mentees = Object.values(appState.accounts).filter(
       (member) =>
@@ -2765,7 +2786,7 @@ function withdrawalCard(withdrawal) {
     <article class="withdrawal-card">
       <div>
         <strong>${escapeHtml(member?.name || withdrawal.memberEmail)}</strong>
-        <span>${updatedLabel(withdrawal.createdAt)} · Updated savings ${money(withdrawal.updatedSavings)}</span>
+        <span>${updatedLabel(withdrawal.createdAt)} · ${escapeHtml(withdrawal.savingsAccountName || "Savings")} · ${money(withdrawal.previousBalance ?? withdrawal.updatedSavings + withdrawal.amount)} → ${money(withdrawal.newBalance ?? withdrawal.updatedSavings)}</span>
         <p>${escapeHtml(withdrawal.reason)}</p>
       </div>
       <strong class="withdrawal-amount">-${money(withdrawal.amount)}</strong>
@@ -2795,14 +2816,12 @@ function renderEditor() {
     return;
   }
 
-  const isCoachReview =
-    account.role === "coach" &&
-    form.sharedWith.includes(account.email) &&
-    form.status === "submitted";
-  const readOnly = account.role === "coach" || form.ownerEmail !== account.email;
+  const assignedCoach = account.role === "coach" && appState.accounts[form.ownerEmail]?.coachEmail === account.email;
+  const isCoachReview = assignedCoach && form.status !== "approved";
+  const readOnly = form.ownerEmail !== account.email && !assignedCoach;
   const authorized =
     (account.role === "user" && form.ownerEmail === account.email) ||
-    (account.role === "coach" && form.sharedWith.includes(account.email));
+    assignedCoach;
   if (!authorized) {
     activeView = "dashboard";
     activeFormId = null;
@@ -2811,7 +2830,7 @@ function renderEditor() {
   }
 
   const calc = calculate(form);
-  const actions = readOnly
+  const actions = account.role === "coach"
     ? `${isCoachReview ? `<button class="btn btn-gold" type="button" data-approve-form="${form.id}">Complete session & approve</button>` : ""}
        <button class="btn btn-secondary" type="button" data-print-form="${form.id}">Print PDF</button>
        <button class="btn btn-secondary" type="button" data-view="dashboard">Back to coach workspace</button>`
@@ -2832,17 +2851,20 @@ function renderEditor() {
       <div class="editor-layout" style="margin-top: ${readOnly ? "16px" : "0"}">
         <div class="editor-main">
           ${overviewPanel(form, calc, readOnly)}
-          ${mortgagePanel(form, calc, readOnly)}
+          ${housingChoicePanel(form, readOnly)}
+          ${form.data.housingPaymentType === "mortgage" ? mortgagePanel(form, calc, readOnly) : ""}
           ${billsPanel(form, calc, readOnly, isCoachReview)}
           ${creditCardPanel(form, calc, readOnly, isCoachReview)}
           ${variablePanel(form, calc, readOnly)}
           ${savingsPanel(form, calc, readOnly)}
           ${debtPanel(form, calc, readOnly)}
           ${studentLoanPanel(form, calc, readOnly)}
+          ${allocationPanel(form, calc, readOnly)}
           ${notesPanel(form, readOnly)}
         </div>
         <aside class="editor-aside">
           ${summaryPanel(calc)}
+          ${calculatorPanel(form, readOnly)}
           <div class="summary-panel">
             <h3>Jump to</h3>
             <nav class="section-links" aria-label="Worksheet sections">
@@ -2905,6 +2927,10 @@ function billsPanel(form, calc, readOnly, isCoachReview) {
       </div>
     </section>
   `;
+}
+
+function housingChoicePanel(form, readOnly) {
+  return `<section class="panel"><div class="panel-heading"><div><h3>Housing payment</h3><p>Choose the housing payment type used for this worksheet.</p></div></div><div class="panel-body"><div class="asset-type-choice"><button class="type-choice ${form.data.housingPaymentType === "mortgage" ? "active" : ""}" type="button" data-housing-type="mortgage" ${readOnly ? "disabled" : ""}>Mortgage</button><button class="type-choice ${form.data.housingPaymentType === "rent" ? "active" : ""}" type="button" data-housing-type="rent" ${readOnly ? "disabled" : ""}>Rent</button></div>${form.data.housingPaymentType === "rent" ? `<p class="quiet-message">Mortgage tracking and calculations are disabled for this form. Add rent under Housing bills.</p>` : ""}</div></section>`;
 }
 
 function billGroup(form, key, label, readOnly, isCoachReview) {
@@ -3145,6 +3171,15 @@ function studentLoanCard(loan, index, readOnly) {
   </div></article>`;
 }
 
+function allocationPanel(form, calc, readOnly) {
+  return `<section class="panel" id="allocations"><div class="panel-heading"><div><h3>Remaining funds allocation</h3><p>Direct leftover funds after the paycheck plan.</p></div>${readOnly ? "" : `<button class="btn btn-secondary btn-small" type="button" data-add-row="allocations"><span aria-hidden="true">＋</span> Add allocation</button>`}</div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Allocate to</th><th>Account or goal</th><th>Amount</th><th></th></tr></thead><tbody>${(form.data.allocations || []).map((row,index)=>`<tr><td><select class="table-input" data-path="allocations.${index}.type" ${readOnly?"disabled":""}>${["savings","debt","credit_card","student_loan",...(form.data.housingPaymentType==="mortgage"?["mortgage"]:[])].map(type=>selectOption(type,type.replaceAll("_"," "),row.type)).join("")}</select></td><td><input class="table-input" data-path="allocations.${index}.account" value="${escapeHtml(row.account||"")}" ${readOnly?"disabled":""}></td><td><div class="money-input-wrap"><input class="table-input" type="number" min="0" step=".01" data-path="allocations.${index}.amount" value="${row.amount||""}" ${readOnly?"disabled":""}></div></td><td>${readOnly?"":`<button class="icon-btn danger" type="button" data-remove-row="allocations.${index}">×</button>`}</td></tr>`).join("")}</tbody></table></div><div class="table-total"><span>Allocated from remaining funds</span><strong>${money(calc.allocationTotal)}</strong></div></section>`;
+}
+
+function calculatorPanel(form, readOnly) {
+  const history = (form.data.calculatorHistory || []).slice(-5).reverse();
+  return `<div class="summary-panel calculator-widget"><h3>Live calculator</h3><form data-calculator-form="${form.id}" class="calculator-form"><input class="input" name="expression" placeholder="Example: 1250 - 425" ${readOnly ? "disabled" : ""}><button class="btn btn-primary btn-small" type="submit" ${readOnly ? "disabled" : ""}>=</button></form><div class="calculator-history">${history.length ? history.map(item=>`<div><span>${escapeHtml(item.expression)}</span><strong>${escapeHtml(String(item.result))}</strong></div>`).join("") : `<p class="quiet-message">No calculations yet.</p>`}</div></div>`;
+}
+
 function notesPanel(form, readOnly) {
   return `
     <section class="panel" id="notes">
@@ -3173,6 +3208,7 @@ function summaryPanel(calc) {
         ${summaryRow("Savings contribution", money(calc.savingsContribution))}
         ${summaryRow("Budgeting", money(calc.variableBudget))}
         ${summaryRow("Total planned outflow", money(calc.totalBills))}
+        ${summaryRow("Remaining funds allocations", money(calc.allocationTotal))}
         ${calc.approvedBills ? summaryRow("Coach selected this check", money(calc.approvedBills)) : ""}
         ${summaryRow("Available after bills", money(calc.available), true, "available")}
       </div>
@@ -3530,10 +3566,21 @@ function showWithdrawalModal(formId) {
   document.body.appendChild(modal);
 }
 
+function showProfileWithdrawalModal(index) {
+  const account = currentAccount();
+  const savingsAccount = account.savingsInvestmentAccounts[Number(index)];
+  if (!savingsAccount || savingsAccount.type !== "savings") return;
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.dataset.assetIndex = String(index);
+  modal.innerHTML = `<section class="modal" role="dialog" aria-modal="true"><div class="modal-header"><h3>Savings withdrawal</h3><button class="icon-btn" type="button" aria-label="Close" data-close-modal>×</button></div><div class="modal-body"><p><strong>${escapeHtml(savingsAccount.name || "Savings account")}</strong> currently has ${money(savingsAccount.balance)}.</p><form id="profile-withdrawal-form" class="form-stack"><div class="field"><label>Withdrawal amount</label><input class="input" name="amount" type="number" min=".01" step=".01" required></div><div class="field"><label>Withdrawal reason</label><textarea class="input" name="reason" required></textarea></div><button class="btn btn-primary" type="submit">Save withdrawal</button></form></div></section>`;
+  document.body.appendChild(modal);
+}
+
 function approveForm(formId, coachNotes = "", actionSteps = "") {
   const coach = currentAccount();
   const form = appState.forms[formId];
-  if (!form || coach.role !== "coach" || !form.sharedWith.includes(coach.email)) return;
+  if (!form || coach.role !== "coach" || appState.accounts[form.ownerEmail]?.coachEmail !== coach.email) return;
   const member = appState.accounts[form.ownerEmail];
   const calc = calculate(form);
   form.status = "approved";
@@ -3837,11 +3884,13 @@ document.addEventListener("click", async (event) => {
   const withdrawalButton = event.target.closest("[data-withdraw-savings]");
   if (withdrawalButton) {
     const member = currentAccount();
-    if (!member.coachEmail || member.coachRequestStatus !== "approved") {
-      showToast("Connect with a coach before submitting a savings withdrawal.");
-      return;
-    }
     showWithdrawalModal(withdrawalButton.dataset.withdrawSavings);
+    return;
+  }
+
+  const profileWithdrawalButton = event.target.closest("[data-withdraw-profile-savings]");
+  if (profileWithdrawalButton) {
+    showProfileWithdrawalModal(profileWithdrawalButton.dataset.withdrawProfileSavings);
     return;
   }
 
@@ -3983,6 +4032,15 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const profileHousingType = event.target.closest("[data-profile-housing-type]");
+  if (profileHousingType) {
+    const account = currentAccount();
+    account.financialInventory.housingPaymentType = profileHousingType.dataset.profileHousingType;
+    saveFinancialProfileMutation(account);
+    renderProfile();
+    return;
+  }
+
   const scheduleToggle = event.target.closest("[data-recurring-schedule-toggle]");
   if (scheduleToggle) {
     const account = currentAccount();
@@ -4045,25 +4103,47 @@ document.addEventListener("click", async (event) => {
 
   const removeMenteeButton = event.target.closest("[data-remove-mentee]");
   if (removeMenteeButton) {
-    const coach = currentAccount();
     const member = appState.accounts[removeMenteeButton.dataset.removeMentee];
-    if (member?.coachEmail === coach.email) {
-      member.coachEmail = null;
-      member.coachRequestStatus = null;
-      Object.values(appState.forms)
-        .filter((form) => form.ownerEmail === member.email)
-        .forEach((form) => {
-          form.sharedWith = form.sharedWith.filter((email) => email !== coach.email);
-        });
-      appState.coachRequests
-        .filter((request) => request.memberEmail === member.email && request.coachEmail === coach.email)
-        .forEach((request) => {
-          request.status = "removed";
-        });
-      saveState();
+    if (!member) return;
+    const modal = document.createElement("div");
+    modal.className = "modal-backdrop";
+    modal.dataset.memberEmail = member.email;
+    modal.innerHTML = `<section class="modal" role="dialog" aria-modal="true"><div class="modal-header"><h3>Remove ${escapeHtml(member.name)}?</h3><button class="icon-btn" type="button" aria-label="Close" data-close-modal>×</button></div><div class="modal-body"><p>This ends the coach connection without deleting the member's personal data.</p><button class="btn btn-danger" type="button" data-confirm-remove-mentee>Remove mentee</button><button class="btn btn-secondary" type="button" data-close-modal>Cancel</button></div></section>`;
+    document.body.appendChild(modal);
+    return;
+  }
+
+  const confirmRemoveMentee = event.target.closest("[data-confirm-remove-mentee]");
+  if (confirmRemoveMentee) {
+    const modal = event.target.closest(".modal-backdrop");
+    const memberEmail = modal?.dataset.memberEmail;
+    confirmRemoveMentee.disabled = true;
+    try {
+      if (productionBackend.enabled) await productionBackend.removeMentee(memberEmail);
+      const member = appState.accounts[memberEmail];
+      if (member) {
+        member.coachEmail = null;
+        member.coachName = "";
+        member.coachRequestStatus = null;
+      }
+      await refreshPortalFromBackend();
+      modal?.remove();
       renderCoachConnection();
-      showToast("Mentee removed from your active list");
+      showToast("Mentee connection removed.");
+    } catch (error) {
+      confirmRemoveMentee.disabled = false;
+      showToast(error.message || "Mentee could not be removed.");
     }
+    return;
+  }
+
+  const housingType = event.target.closest("[data-housing-type]");
+  if (housingType && activeFormId) {
+    const form = appState.forms[activeFormId];
+    form.data.housingPaymentType = housingType.dataset.housingType;
+    form.updatedAt = new Date().toISOString();
+    saveState();
+    renderEditor();
     return;
   }
 
@@ -4225,6 +4305,7 @@ document.addEventListener("click", async (event) => {
     if (path === "variableSpending") target.push(blankVariable());
     if (path === "debts") target.push(blankDebt());
     if (path === "studentLoans") target.push(blankStudentLoan());
+    if (path === "allocations") target.push({ id: uid("allocation"), type: "savings", account: "", amount: "" });
     form.updatedAt = new Date().toISOString();
     saveState();
     renderEditor();
@@ -4261,6 +4342,30 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("submit", async (event) => {
+  const calculatorForm = event.target.closest("[data-calculator-form]");
+  if (calculatorForm) {
+    event.preventDefault();
+    const form = appState.forms[calculatorForm.dataset.calculatorForm];
+    const expression = String(new FormData(calculatorForm).get("expression") || "").trim();
+    if (!form || !/^[\d\s()+\-*/.]+$/.test(expression)) {
+      showToast("Use numbers and +, -, ×, or ÷ only.");
+      return;
+    }
+    try {
+      const result = Function(`"use strict"; return (${expression})`)();
+      if (!Number.isFinite(result)) throw new Error();
+      form.data.calculatorHistory ||= [];
+      form.data.calculatorHistory.push({ id: uid("calculation"), expression, result: Math.round(result * 100) / 100, createdAt: new Date().toISOString(), authorEmail: currentAccount().email });
+      form.data.calculatorHistory = form.data.calculatorHistory.slice(-5);
+      form.updatedAt = new Date().toISOString();
+      saveState();
+      renderEditor();
+    } catch {
+      showToast("That calculation could not be completed.");
+    }
+    return;
+  }
+
   if (event.target.id === "login-form") {
     event.preventDefault();
     const data = new FormData(event.target);
@@ -4643,13 +4748,42 @@ document.addEventListener("submit", async (event) => {
       coachEmail: member.coachEmail,
       amount,
       reason,
+      savingsAccountName: "Worksheet savings",
+      previousBalance: calc.savingsAfter,
+      newBalance: updatedSavings,
       updatedSavings,
       createdAt: new Date().toISOString(),
     });
     saveState();
     modal.remove();
     renderEditor();
-    showToast("Savings withdrawal recorded and sent to your coach");
+    showToast(member.coachEmail ? "Savings withdrawal recorded and sent to your coach" : "Savings withdrawal recorded");
+    return;
+  }
+
+  if (event.target.id === "profile-withdrawal-form") {
+    event.preventDefault();
+    const modal = event.target.closest(".modal-backdrop");
+    const member = currentAccount();
+    const savingsAccount = member.savingsInvestmentAccounts[Number(modal.dataset.assetIndex)];
+    const data = new FormData(event.target);
+    const amount = Number(data.get("amount")) || 0;
+    const reason = String(data.get("reason") || "").trim();
+    const previousBalance = Number(savingsAccount?.balance) || 0;
+    if (!savingsAccount || savingsAccount.type !== "savings" || amount <= 0 || amount > previousBalance || !reason) {
+      showToast("Enter a valid withdrawal amount and reason.");
+      return;
+    }
+    const newBalance = previousBalance - amount;
+    savingsAccount.balance = String(newBalance);
+    savingsAccount.updatedAt = todayValue();
+    saveAssetHistoryEntry(member, modal.dataset.assetIndex);
+    appState.withdrawals.push({ id: uid("withdrawal"), memberEmail: member.email, coachEmail: member.coachEmail || null, savingsAccountName: savingsAccount.name || "Savings account", previousBalance, newBalance, amount, reason, updatedSavings: profileSavingsTotal(member), createdAt: new Date().toISOString() });
+    saveState();
+    modal.remove();
+    renderProfile();
+    showToast(member.coachEmail ? "Withdrawal saved and shared with your coach." : "Withdrawal saved.");
+    return;
   }
 });
 
@@ -4676,6 +4810,8 @@ document.addEventListener("input", (event) => {
   }
   form.updatedAt = new Date().toISOString();
   refreshLiveAvailable(form);
+  clearTimeout(formAutosaveTimer);
+  formAutosaveTimer = setTimeout(() => saveState(), 700);
 });
 
 document.addEventListener("keydown", (event) => {
@@ -4942,8 +5078,33 @@ async function initializePortal() {
   }
   normalizeStateModels(appState);
   if (currentAccount()) saveState();
+  if (productionBackend.enabled && currentAccount()) {
+    productionBackend.subscribeToPortalChanges?.(() => {
+      if (document.activeElement?.matches("input, textarea, select")) return;
+      refreshPortalFromBackend();
+    });
+  }
   touchActivity();
   render();
+}
+
+let portalRefreshInProgress = false;
+async function refreshPortalFromBackend() {
+  if (!productionBackend.enabled || portalRefreshInProgress || !currentAccount()) return;
+  portalRefreshInProgress = true;
+  try {
+    const hydrated = await productionBackend.hydrate();
+    if (!hydrated) return;
+    const currentEmail = appState.sessionEmail;
+    appState = normalizeStateModels(hydrated);
+    appState.sessionEmail = currentEmail;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+    render();
+  } catch (error) {
+    console.warn("Could not refresh live portal data", error);
+  } finally {
+    portalRefreshInProgress = false;
+  }
 }
 
 let accountValidationInProgress = false;
@@ -4982,6 +5143,9 @@ setInterval(() => {
   touchActivity();
   validateCurrentAccount();
 }, 15 * 1000);
+setInterval(() => {
+  if (!document.activeElement?.matches("input, textarea, select")) refreshPortalFromBackend();
+}, 5 * 1000);
 window.addEventListener("focus", validateCurrentAccount);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") validateCurrentAccount();
