@@ -3635,33 +3635,53 @@ function beginCalculatorDrag(event) {
   calculator.style.top = `${rect.top}px`;
   calculator.style.right = "auto";
   calculator.style.bottom = "auto";
+  calculator.style.transform = "translate3d(0, 0, 0)";
   calculator.classList.add("dragging");
+  handle.setPointerCapture?.(event.pointerId);
   calculatorDragState = {
     calculator,
+    handle,
+    pointerId: event.pointerId,
     formId: calculator.dataset.draggableCalculator,
-    offsetX: event.clientX - rect.left,
-    offsetY: event.clientY - rect.top,
+    startX: event.clientX,
+    startY: event.clientY,
+    originLeft: rect.left,
+    originTop: rect.top,
+    maxLeft: Math.max(8, window.innerWidth - rect.width - 8),
+    maxTop: Math.max(8, window.innerHeight - rect.height - 8),
+    left: rect.left,
+    top: rect.top,
+    frameId: null,
   };
   event.preventDefault();
 }
 
 function moveCalculator(event) {
-  if (!calculatorDragState) return;
-  const { calculator, offsetX, offsetY } = calculatorDragState;
-  const maxLeft = Math.max(8, window.innerWidth - calculator.offsetWidth - 8);
-  const maxTop = Math.max(8, window.innerHeight - calculator.offsetHeight - 8);
-  const left = Math.min(maxLeft, Math.max(8, event.clientX - offsetX));
-  const top = Math.min(maxTop, Math.max(8, event.clientY - offsetY));
-  calculator.style.left = `${left}px`;
-  calculator.style.top = `${top}px`;
+  const drag = calculatorDragState;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  drag.left = Math.min(drag.maxLeft, Math.max(8, drag.originLeft + event.clientX - drag.startX));
+  drag.top = Math.min(drag.maxTop, Math.max(8, drag.originTop + event.clientY - drag.startY));
+  if (drag.frameId) return;
+  drag.frameId = requestAnimationFrame(() => {
+    if (calculatorDragState !== drag) return;
+    drag.frameId = null;
+    drag.calculator.style.transform =
+      `translate3d(${drag.left - drag.originLeft}px, ${drag.top - drag.originTop}px, 0)`;
+  });
 }
 
-function endCalculatorDrag() {
-  if (!calculatorDragState) return;
-  const { calculator } = calculatorDragState;
+function endCalculatorDrag(event) {
+  const drag = calculatorDragState;
+  if (!drag || (event?.pointerId != null && event.pointerId !== drag.pointerId)) return;
+  const { calculator, handle, pointerId, left, top, frameId } = drag;
+  if (frameId) cancelAnimationFrame(frameId);
+  calculator.style.left = `${left}px`;
+  calculator.style.top = `${top}px`;
+  calculator.style.transform = "";
   calculator.classList.remove("dragging");
-  saveCalculatorGeometry(calculator);
+  if (handle?.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
   calculatorDragState = null;
+  saveCalculatorGeometry(calculator);
 }
 
 function saveCalculatorGeometry(calculator) {
@@ -3683,7 +3703,7 @@ function saveCalculatorGeometry(calculator) {
 
 function handleCalculatorPointerEnd(event) {
   if (calculatorDragState) {
-    endCalculatorDrag();
+    endCalculatorDrag(event);
     return;
   }
   const calculator = event.target?.closest?.("[data-draggable-calculator]");

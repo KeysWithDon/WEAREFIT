@@ -3837,6 +3837,8 @@ html[data-theme="dark"] .onboarding-banner strong {
   cursor: grabbing;
   opacity: 0.94;
   user-select: none;
+  will-change: transform;
+  contain: layout paint;
 }
 
 .draggable-calculator .calculator-heading {
