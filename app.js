@@ -1981,7 +1981,8 @@ function profilePhotoPanel(account, canEdit) {
       <div><strong>${escapeHtml(account.name)}</strong><span>${account.role === "coach" ? "F.I.T. coach" : "F.I.T. member"}</span></div>
       ${
         canEdit
-          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-profile-photo-upload accept=".png,.jpg,.jpeg,.webp">Change photo</label>`
+          ? `<button class="btn btn-secondary btn-small profile-photo-button" type="button" data-change-photo="account-holder">Change photo</button>
+             <input class="profile-photo-input" type="file" data-profile-photo-upload accept="image/png,image/jpeg,image/webp">`
           : ""
       }
     </section>
@@ -1995,7 +1996,8 @@ function spousePhotoPanel(account, canEdit) {
       <div><strong>${escapeHtml(account.profile.spouseName || "Spouse")}</strong><span>Spouse profile photo</span></div>
       ${
         canEdit
-          ? `<label class="btn btn-secondary btn-small profile-photo-button"><input type="file" data-spouse-photo-upload accept=".png,.jpg,.jpeg,.webp">Change photo</label>`
+          ? `<button class="btn btn-secondary btn-small profile-photo-button" type="button" data-change-photo="spouse">Change photo</button>
+             <input class="profile-photo-input" type="file" data-spouse-photo-upload accept="image/png,image/jpeg,image/webp">`
           : ""
       }
     </section>
@@ -2332,10 +2334,10 @@ function mortgageProfileSection(account) {
   const progress = total ? Math.min(100, Math.max(0, ((total - current) / total) * 100)) : 0;
   return `
     <section class="panel profile-inventory">
-      <div class="panel-heading"><div><h3>Mortgage profile</h3><p>Track the original mortgage and current payoff progress.</p></div></div>
+      <div class="panel-heading"><div><h3>Housing profile</h3><p>Select rent or mortgage once. New and open worksheets will follow this saved choice automatically.</p></div></div>
       <div class="panel-body">
         <div class="asset-type-choice"><button class="type-choice ${account.financialInventory.housingPaymentType === "mortgage" ? "active" : ""}" type="button" data-profile-housing-type="mortgage">Mortgage</button><button class="type-choice ${account.financialInventory.housingPaymentType === "rent" ? "active" : ""}" type="button" data-profile-housing-type="rent">Rent</button></div>
-        ${account.financialInventory.housingPaymentType === "rent" ? `<p class="quiet-message">Mortgage details are preserved but excluded from new forms while Rent is selected.</p>` : ""}
+        ${account.financialInventory.housingPaymentType === "rent" ? `<p class="quiet-message">Rent is saved. Mortgage details are preserved but hidden and excluded from worksheets.</p>` : ""}
         <div class="${account.financialInventory.housingPaymentType === "rent" ? "hidden" : ""}">
         <div class="profile-inventory-grid">
           ${moneyField("Total mortgage amount", "financialInventory.mortgage.totalAmount", mortgage.totalAmount, false)}
@@ -3146,6 +3148,13 @@ function renderEditor() {
     return;
   }
 
+  const ownerHousingType = appState.accounts[form.ownerEmail]?.financialInventory?.housingPaymentType || "mortgage";
+  if (form.status !== "approved" && form.data.housingPaymentType !== ownerHousingType) {
+    form.data.housingPaymentType = ownerHousingType;
+    form.updatedAt = new Date().toISOString();
+    saveState();
+  }
+
   const calc = calculate(form);
   const actions = account.role === "coach"
     ? `${isCoachReview ? `<button class="btn btn-gold" type="button" data-approve-form="${form.id}">Complete session & approve</button>` : ""}
@@ -3168,7 +3177,6 @@ function renderEditor() {
       <div class="editor-layout" style="margin-top: ${readOnly ? "16px" : "0"}">
         <div class="editor-main">
           ${overviewPanel(form, calc, readOnly)}
-          ${housingChoicePanel(form, readOnly)}
           ${form.data.housingPaymentType === "mortgage" ? mortgagePanel(form, calc, readOnly) : ""}
           ${billsPanel(form, calc, readOnly, isCoachReview)}
           ${creditCardPanel(form, calc, readOnly, isCoachReview)}
@@ -3186,7 +3194,7 @@ function renderEditor() {
             <nav class="section-links" aria-label="Worksheet sections">
               <a href="#overview">Paycheck overview</a>
               <a href="#bills">Fixed bills</a>
-              <a href="#mortgage">Mortgage / rent</a>
+              ${form.data.housingPaymentType === "mortgage" ? `<a href="#mortgage">Mortgage</a>` : ""}
               <a href="#cards">Credit cards</a>
               <a href="#savings">Savings</a>
               <a href="#debt">Debt</a>
@@ -3245,10 +3253,6 @@ function billsPanel(form, calc, readOnly, isCoachReview) {
   `;
 }
 
-function housingChoicePanel(form, readOnly) {
-  return `<section class="panel"><div class="panel-heading"><div><h3>Housing payment</h3><p>Choose the housing payment type used for this worksheet.</p></div></div><div class="panel-body"><div class="asset-type-choice"><button class="type-choice ${form.data.housingPaymentType === "mortgage" ? "active" : ""}" type="button" data-housing-type="mortgage" ${readOnly ? "disabled" : ""}>Mortgage</button><button class="type-choice ${form.data.housingPaymentType === "rent" ? "active" : ""}" type="button" data-housing-type="rent" ${readOnly ? "disabled" : ""}>Rent</button></div>${form.data.housingPaymentType === "rent" ? `<p class="quiet-message">Mortgage tracking and calculations are disabled for this form. Add rent under Housing bills.</p>` : ""}</div></section>`;
-}
-
 function billGroup(form, key, label, readOnly, isCoachReview) {
   const rows = form.data.bills[key];
   const suggestions = currentAccount()?.financialInventory?.recurringBills || [];
@@ -3290,7 +3294,7 @@ function mortgagePanel(form, calc, readOnly) {
   const progress = total ? Math.min(100, Math.max(0, ((total - calc.mortgageAfter) / total) * 100)) : 0;
   return `
     <section class="panel" id="mortgage">
-      <div class="panel-heading"><div><h3>Mortgage / rent paydown tracker</h3><p>Track the amount reserved before the next due date</p></div></div>
+      <div class="panel-heading"><div><h3>Mortgage paydown tracker</h3><p>Track the amount reserved before the next due date</p></div></div>
       <div class="panel-body tracker-grid">
         ${moneyField("Total mortgage amount", "mortgage.totalAmount", mortgage.totalAmount, readOnly)}
         ${percentField("Mortgage interest rate", "mortgage.interestRate", mortgage.interestRate, readOnly)}
@@ -3553,13 +3557,13 @@ function calculatorPanel(form, readOnly) {
   const savedSize = form.data.calculatorSize || {};
   const compactViewport = window.innerWidth <= 620;
   const viewportWidth = Math.max(220, window.innerWidth - 24);
-  const minWidth = Math.min(compactViewport ? 224 : 236, viewportWidth);
+  const minWidth = Math.min(compactViewport ? 184 : 190, viewportWidth);
   const maxWidth = Math.max(minWidth, Math.min(compactViewport ? 360 : 430, viewportWidth));
   const defaultWidth = Math.min(compactViewport ? 268 : 292, maxWidth);
   const savedWidth = Number(savedSize.width);
   const calculatorWidth = savedWidth ? Math.min(Math.max(minWidth, savedWidth), maxWidth) : defaultWidth;
   const viewportHeight = Math.max(360, window.innerHeight - 24);
-  const minHeight = Math.min(compactViewport ? 390 : 430, viewportHeight);
+  const minHeight = Math.min(compactViewport ? 320 : 330, viewportHeight);
   const maxHeight = Math.max(minHeight, viewportHeight);
   const savedHeight = Number(savedSize.height);
   const calculatorHeight = savedHeight
@@ -3714,6 +3718,93 @@ function handleCalculatorPointerEnd(event) {
   }
   const calculator = event.target?.closest?.("[data-draggable-calculator]");
   if (calculator) saveCalculatorGeometry(calculator);
+}
+
+function calculatorKeyboardKey(event) {
+  if (/^Numpad\d$/.test(event.code)) return event.code.slice(-1);
+  const codeKeys = {
+    NumpadDecimal: ".",
+    NumpadAdd: "+",
+    NumpadSubtract: "−",
+    NumpadMultiply: "×",
+    NumpadDivide: "÷",
+    NumpadEnter: "=",
+  };
+  if (codeKeys[event.code]) return codeKeys[event.code];
+  if (/^\d$/.test(event.key)) return event.key;
+  const keyMap = {
+    ".": ".",
+    "+": "+",
+    "-": "−",
+    "*": "×",
+    "/": "÷",
+    "%": "%",
+    Enter: "=",
+    "=": "=",
+    Escape: "AC",
+    Delete: "AC",
+    Backspace: "backspace",
+  };
+  return keyMap[event.key] || "";
+}
+
+function handleCalculatorKeyboard(event) {
+  if (!activeFormId || activeView !== "editor") return false;
+  if (event.target?.matches?.("input, textarea, select, [contenteditable='true']")) return false;
+  if (event.target?.matches?.("button") && !event.target.closest("[data-draggable-calculator]")) return false;
+  const calculator = document.querySelector(`[data-draggable-calculator="${activeFormId}"]`);
+  const form = appState.forms[activeFormId];
+  if (!calculator || !form || calculator.querySelector("[data-calculator-key]")?.disabled) return false;
+  const key = calculatorKeyboardKey(event);
+  if (!key) return false;
+  event.preventDefault();
+  saveCalculatorGeometry(calculator);
+  try {
+    let completed = false;
+    if (key === "backspace") {
+      form.data.calculatorDraft = String(form.data.calculatorDraft || "").slice(0, -1);
+      form.data.calculatorJustEvaluated = false;
+    } else {
+      completed = applyCalculatorKey(form, key);
+    }
+    form.updatedAt = new Date().toISOString();
+    saveState();
+    renderEditor();
+    if (completed) showToast("Calculation saved to the recent list.");
+  } catch {
+    showToast("That calculation could not be completed.");
+  }
+  return true;
+}
+
+async function prepareProfilePhoto(file) {
+  const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+  if (!allowedTypes.includes(file.type)) {
+    throw new Error("Choose a PNG, JPG, or WebP profile photo.");
+  }
+  if (file.size <= 1024 * 1024) return file;
+  if (file.size > 12 * 1024 * 1024) {
+    throw new Error("Choose a profile photo smaller than 12 MB.");
+  }
+  const image = await createImageBitmap(file);
+  const maxDimension = 1200;
+  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  image.close?.();
+  let quality = 0.86;
+  let blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  while (blob?.size > 1024 * 1024 && quality > 0.5) {
+    quality -= 0.08;
+    blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  }
+  if (!blob || blob.size > 1024 * 1024) {
+    throw new Error("This photo could not be prepared. Choose a smaller image.");
+  }
+  const baseName = file.name.replace(/\.[^.]+$/, "") || "profile-photo";
+  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg", lastModified: Date.now() });
 }
 
 function notesPanel(form, readOnly) {
@@ -4393,6 +4484,16 @@ async function createAccount(name, email, password, role) {
 }
 
 document.addEventListener("click", async (event) => {
+  const changePhotoButton = event.target.closest("[data-change-photo]");
+  if (changePhotoButton) {
+    const selector = changePhotoButton.dataset.changePhoto === "spouse"
+      ? "[data-spouse-photo-upload]"
+      : "[data-profile-photo-upload]";
+    const input = changePhotoButton.closest(".profile-photo-panel")?.querySelector(selector);
+    input?.click();
+    return;
+  }
+
   const calculatorKey = event.target.closest("[data-calculator-key]");
   if (calculatorKey) {
     const form = appState.forms[calculatorKey.dataset.calculatorFormId];
@@ -4744,16 +4845,6 @@ document.addEventListener("click", async (event) => {
       confirmRemoveMentee.disabled = false;
       showToast(error.message || "Mentee could not be removed.");
     }
-    return;
-  }
-
-  const housingType = event.target.closest("[data-housing-type]");
-  if (housingType && activeFormId) {
-    const form = appState.forms[activeFormId];
-    form.data.housingPaymentType = housingType.dataset.housingType;
-    form.updatedAt = new Date().toISOString();
-    saveState();
-    renderEditor();
     return;
   }
 
@@ -5405,6 +5496,7 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (handleCalculatorKeyboard(event)) return;
   if (event.key !== "Enter" || event.target.matches("textarea")) return;
   if (event.target.matches("[data-profile-path], [data-asset-path], [data-path]")) {
     event.preventDefault();
@@ -5501,10 +5593,13 @@ document.addEventListener("change", async (event) => {
 
   const profilePhotoInput = event.target.closest("[data-profile-photo-upload]");
   if (profilePhotoInput?.files?.[0]) {
-    const file = profilePhotoInput.files[0];
-    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
-    if (!allowedTypes.includes(file.type) || file.size > 1024 * 1024) {
-      showToast("Upload a PNG, JPG, or WebP profile photo no larger than 1 MB.");
+    let file;
+    try {
+      showToast("Preparing profile photo...");
+      file = await prepareProfilePhoto(profilePhotoInput.files[0]);
+    } catch (error) {
+      profilePhotoInput.value = "";
+      showToast(error.message || "Profile photo could not be prepared.");
       return;
     }
     if (productionBackend.enabled) {
@@ -5526,6 +5621,7 @@ document.addEventListener("change", async (event) => {
         renderProfile();
         showToast("Profile photo securely updated.");
       } catch (error) {
+        profilePhotoInput.value = "";
         showToast(error.message || "Profile photo upload failed.");
       }
       return;
@@ -5546,15 +5642,19 @@ document.addEventListener("change", async (event) => {
       }
     };
     reader.readAsDataURL(file);
+    profilePhotoInput.value = "";
     return;
   }
 
   const spousePhotoInput = event.target.closest("[data-spouse-photo-upload]");
   if (spousePhotoInput?.files?.[0]) {
-    const file = spousePhotoInput.files[0];
-    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
-    if (!allowedTypes.includes(file.type) || file.size > 1024 * 1024) {
-      showToast("Upload a PNG, JPG, or WebP spouse photo no larger than 1 MB.");
+    let file;
+    try {
+      showToast("Preparing spouse photo...");
+      file = await prepareProfilePhoto(spousePhotoInput.files[0]);
+    } catch (error) {
+      spousePhotoInput.value = "";
+      showToast(error.message || "Spouse photo could not be prepared.");
       return;
     }
     if (productionBackend.enabled) {
@@ -5576,6 +5676,7 @@ document.addEventListener("change", async (event) => {
         renderProfile();
         showToast("Spouse photo securely updated.");
       } catch (error) {
+        spousePhotoInput.value = "";
         showToast(error.message || "Spouse photo upload failed.");
       }
       return;
@@ -5596,6 +5697,7 @@ document.addEventListener("change", async (event) => {
       }
     };
     reader.readAsDataURL(file);
+    spousePhotoInput.value = "";
     return;
   }
 
